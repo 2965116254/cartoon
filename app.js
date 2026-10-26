@@ -596,6 +596,141 @@ function renderResults(items) {
   $('resultSection').classList.remove('hidden');
 }
 
+/* ---------------- 番名联想（输入前几个字实时推荐番名） ----------------
+ * 用轻量接口 ac=videolist（响应小、不带剧集，比播放用的 ac=detail 快得多），
+ * 多渠道并行、渐进合并，先到的先显示；点击直接搜。 */
+const SUGGEST_DEBOUNCE = 300;    // 停止输入 300ms 才请求
+const SUGGEST_TIMEOUT = 3500;    // 联想单请求超时（比正式搜索更短，保证跟手）
+const SUGGEST_MAX = 12;          // 下拉最多展示条数
+const SUGGEST_MIN_CHARS = 2;     // 至少输入 2 个字才联想
+let suggestSeq = 0;
+let suggestTimer = null;
+let sugActiveIdx = -1;           // 键盘高亮行
+const sugCache = new Map();      // 前缀 -> 候选列表（同一前缀不重复请求）
+
+/** 轻量搜索，仅供联想（不解析剧集） */
+async function suggestChannel(ch, query) {
+  const url = `${ch.api}?ac=videolist&wd=${encodeURIComponent(query)}`;
+  let data = null;
+  let cands = candidateUrls(url);
+  if (IS_REMOTE && !ch.cors) cands = [...cands.filter(c => c.wrap), ...cands.filter(c => !c.wrap)];
+  for (const { u } of cands) {
+    if (data) break;
+    try {
+      const res = await fetchTimeout(u, SUGGEST_TIMEOUT);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      data = await res.json();
+    } catch (e) { /* 试下一个候选 */ }
+  }
+  return (((data && data.list) || []))
+    .map(v => ({
+      name: String(v.vod_name || '').trim(),
+      pic: v.vod_pic || '',
+      remark: String(v.vod_remarks || '').trim(),
+      year: String(v.vod_year || '').trim(),
+    }))
+    .filter(v => v.name);
+}
+
+function suggestMatch(name, query) {
+  const n = normalizeTitle(name).toLowerCase();
+  const q = normalizeTitle(query).toLowerCase();
+  return n.includes(q) || q.includes(n.slice(0, Math.max(2, q.length - 1)));
+}
+
+/** 渐进式联想：每个渠道先回来就先刷新下拉 */
+async function requestSuggestions(query) {
+  const seq = ++suggestSeq;
+  const cached = sugCache.get(query);
+  if (cached) { renderSuggestions(cached, query); return; }
+
+  const merged = new Map();
+  const flush = () => {
+    if (seq !== suggestSeq) return;
+    const items = [...merged.values()];
+    if (sugCache.size > 40) sugCache.clear();   // 简易防膨胀
+    sugCache.set(query, items);
+    renderSuggestions(items, query);
+  };
+
+  CHANNELS.forEach(async (ch) => {
+    const r = await suggestChannel(ch, query).catch(() => []);
+    if (seq !== suggestSeq) return;
+    const rel = r.filter(it => suggestMatch(it.name, query));
+    for (const it of (rel.length ? rel : r)) {
+      const key = normalizeTitle(it.name);
+      if (key && !merged.has(key)) merged.set(key, it);
+    }
+    flush();
+  });
+}
+
+function highlightName(name, query) {
+  const idx = name.toLowerCase().indexOf(query.toLowerCase());
+  if (idx < 0) return escapeHtml(name);
+  return escapeHtml(name.slice(0, idx)) + '<b>' +
+    escapeHtml(name.slice(idx, idx + query.length)) + '</b>' +
+    escapeHtml(name.slice(idx + query.length));
+}
+
+function renderSuggestions(items, query) {
+  const box = $('suggestBox');
+  if (!items.length) { hideSuggestions(); return; }
+  sugActiveIdx = -1;
+  box.innerHTML = items.slice(0, SUGGEST_MAX).map(it => {
+    const thumb = it.pic
+      ? `<img class="sg-thumb" src="${escapeHtml(it.pic)}" loading="lazy" onerror="this.outerHTML='<div class=&quot;sg-emoji&quot;>🐱</div>'">`
+      : `<div class="sg-emoji">🐱</div>`;
+    return `<div class="suggest-item" data-name="${escapeHtml(it.name)}">
+      ${thumb}
+      <div class="sg-info">
+        <div class="sg-name">${highlightName(it.name, query)}</div>
+        <div class="sg-meta">${escapeHtml([it.year, it.remark].filter(Boolean).join(' · ') || '点击直接搜')}</div>
+      </div>
+    </div>`;
+  }).join('') + (items.length > SUGGEST_MAX ? '<div class="suggest-more">…还有更多，回车直接搜</div>' : '');
+  box.classList.remove('hidden');
+  // mousedown + preventDefault：抢在 input blur 隐藏下拉之前完成点选
+  box.querySelectorAll('.suggest-item').forEach(el => {
+    el.addEventListener('mousedown', (e) => { e.preventDefault(); pickSuggestion(el.dataset.name); });
+  });
+}
+
+function pickSuggestion(name) {
+  hideSuggestions();
+  $('searchInput').value = name;
+  doSearch(name);
+}
+
+function hideSuggestions() {
+  const box = $('suggestBox');
+  box.classList.add('hidden');
+  box.innerHTML = '';
+  sugActiveIdx = -1;
+}
+
+/** 输入框防抖入口 + 键盘上下选择 */
+function onSearchInput(value) {
+  clearTimeout(suggestTimer);
+  const q = String(value || '').trim();
+  if (q.length < SUGGEST_MIN_CHARS) { hideSuggestions(); return; }
+  suggestTimer = setTimeout(() => requestSuggestions(q), SUGGEST_DEBOUNCE);
+}
+
+/** 键盘在联想下拉里移动高亮，返回当前高亮的番名（没有则 null） */
+function suggestKeynav(key) {
+  const box = $('suggestBox');
+  if (box.classList.contains('hidden')) return null;
+  const items = [...box.querySelectorAll('.suggest-item')];
+  if (!items.length) return null;
+  if (key === 'ArrowDown') sugActiveIdx = (sugActiveIdx + 1) % items.length;
+  else if (key === 'ArrowUp') sugActiveIdx = (sugActiveIdx - 1 + items.length) % items.length;
+  else return null;
+  items.forEach((el, i) => el.classList.toggle('active', i === sugActiveIdx));
+  items[sugActiveIdx].scrollIntoView({ block: 'nearest' });
+  return items[sugActiveIdx].dataset.name;
+}
+
 /* ---------------- 搜索入口 ---------------- */
 let searching = false;
 let searchSeq = 0;   // 搜索序号：过期搜索（被新搜索取代/超时后后台补结果）不再渲染
@@ -618,6 +753,7 @@ async function doSearch(query) {
   if (searching) return;
   searching = true;
   const seq = ++searchSeq;
+  hideSuggestions();
 
   $('resultSection').classList.add('hidden');
   $('emptyArea').classList.add('hidden');
@@ -658,8 +794,24 @@ async function doSearch(query) {
 }
 
 /* ---------------- 事件绑定 ---------------- */
-$('searchBtn').onclick = () => doSearch($('searchInput').value);
-$('searchInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(e.target.value); });
+$('searchBtn').onclick = () => { hideSuggestions(); doSearch($('searchInput').value); };
+$('searchInput').addEventListener('input', (e) => onSearchInput(e.target.value));
+$('searchInput').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    const picked = suggestKeynav(e.key);
+    if (picked) { e.preventDefault(); return; }   // 联想高亮中：不移动光标，回车时选中
+  }
+  if (e.key === 'Enter') {
+    const box = $('suggestBox');
+    const active = !box.classList.contains('hidden') && sugActiveIdx >= 0
+      ? box.querySelectorAll('.suggest-item')[sugActiveIdx] : null;
+    hideSuggestions();
+    doSearch(active ? active.dataset.name : e.target.value);
+  } else if (e.key === 'Escape') {
+    hideSuggestions();
+  }
+});
+document.addEventListener('click', (e) => { if (!e.target.closest('.search-wrap')) hideSuggestions(); });
 document.querySelectorAll('.chip').forEach(c => c.onclick = () => doSearch(c.dataset.q));
 $('modalClose').onclick = closeModal;
 $('modalMask').onclick = closeModal;

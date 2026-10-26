@@ -68,6 +68,7 @@ main { max-width: 1060px; margin: 0 auto; padding: 10px 16px 40px; position: rel
 
 /* ---------- 搜索框 ---------- */
 .search-section { margin-top: 14px; }
+.search-wrap { position: relative; max-width: 720px; margin: 0 auto; }
 .search-box {
   display: flex; align-items: center; gap: 10px;
   background: var(--card);
@@ -97,6 +98,36 @@ main { max-width: 1060px; margin: 0 auto; padding: 10px 16px 40px; position: rel
 .btn-candy:active { transform: translateY(3px); box-shadow: 0 1px 0 #d94b83; }
 
 .hot-chips { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; }
+
+/* ---------- 番名联想下拉 ---------- */
+.suggest-box {
+  position: absolute; top: calc(100% + 8px); left: 0; right: 0;
+  background: var(--card);
+  border: 3px solid var(--pink-light);
+  border-radius: 22px;
+  box-shadow: 0 12px 28px rgba(229, 96, 143, .22);
+  padding: 8px;
+  max-height: 340px; overflow-y: auto;
+  z-index: 50;
+  animation: sugPop .18s ease-out;
+}
+@keyframes sugPop { from { opacity: 0; transform: translateY(-6px) scale(.98); } to { opacity: 1; transform: none; } }
+.suggest-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: 14px;
+  cursor: pointer; transition: background .15s;
+}
+.suggest-item:hover, .suggest-item.active { background: #ffe9f2; }
+.sg-thumb {
+  width: 42px; height: 56px; border-radius: 10px; object-fit: cover;
+  background: #ffe3ef; flex-shrink: 0; border: 2px solid var(--pink-light);
+}
+.sg-emoji { width: 42px; height: 56px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-size: 26px; }
+.sg-info { min-width: 0; }
+.sg-name { font-size: 15px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sg-name b { color: var(--pink-deep); }
+.sg-meta { font-size: 12px; color: var(--ink-light); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.suggest-more { text-align: center; font-size: 12px; color: var(--ink-light); padding: 6px 0 4px; }
 .chip-label { color: var(--ink-light); font-size: 13px; }
 .chip {
   border: 2px solid var(--pink-light); background: #fff;

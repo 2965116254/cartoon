@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>喵呜动漫 🌸 · 可爱动漫搜索播放</title>
-<link rel="stylesheet" href="style.css?v=4">
+<link rel="stylesheet" href="style.css?v=5">
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 </head>
 <body>
@@ -56,10 +56,14 @@
 <main>
   <!-- 搜索区 -->
   <section class="search-section">
-    <div class="search-box">
-      <span class="search-icon">🔍</span>
-      <input id="searchInput" type="text" placeholder="想看什么动漫呀？例如：海贼王、火影忍者、千与千寻…" autocomplete="off">
-      <button id="searchBtn" class="btn-candy" title="搜索">搜番！</button>
+    <div class="search-wrap">
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input id="searchInput" type="text" placeholder="想看什么动漫呀？输入几个字就有番名联想喵～" autocomplete="off">
+        <button id="searchBtn" class="btn-candy" title="搜索">搜番！</button>
+      </div>
+      <!-- 番名联想下拉 -->
+      <div id="suggestBox" class="suggest-box hidden"></div>
     </div>
     <div class="hot-chips">
       <span class="chip-label">热门：</span>
@@ -165,6 +169,6 @@
 <!-- 轻提示 -->
 <div id="toastBox" class="toast-box"></div>
 
-<script src="app.js?v=9"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>
