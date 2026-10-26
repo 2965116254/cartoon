@@ -1,3 +1,4 @@
 node_modules/
 _selftest.js
 __pycache__/
+_*.js
