@@ -23,8 +23,9 @@ const CHANNELS = [
   { key: 'uku',       name: 'uku源',    api: 'https://api.ukuapi88.com/api.php/provide/vod', cors: false },
 ];
 
-const TIMEOUT_SEARCH = 8000;   // 搜索超时 8s
-const TIMEOUT_DETECT = 8000;   // 播放检测超时 8s
+const TIMEOUT_SEARCH = 6000;   // 搜索单请求超时 6s（渐进式渲染，慢渠道不阻塞出结果）
+const SEARCH_DEADLINE = 6500;  // 搜索总时限：到点先展示已到的结果，慢渠道后台继续补
+const TIMEOUT_DETECT = 8000;   // 播放检测超时 8s（保证播放可靠性，不压缩）
 const LS_HISTORY = 'meow_anime_history';
 
 /* ---------------- 运行环境与代理策略 ----------------
@@ -83,25 +84,6 @@ async function fetchTimeout(url, ms = TIMEOUT_SEARCH) {
   }
 }
 
-/** JSONP 兜底：跨域 fetch 被拦时尝试 script 方式 */
-function jsonp(url, ms = TIMEOUT_SEARCH) {
-  return new Promise((resolve, reject) => {
-    const cbName = '__meow_cb_' + Math.random().toString(36).slice(2);
-    const sep = url.includes('?') ? '&' : '?';
-    const script = document.createElement('script');
-    const timer = setTimeout(() => { cleanup(); reject(new Error('jsonp timeout')); }, ms);
-    function cleanup() {
-      clearTimeout(timer);
-      delete window[cbName];
-      script.remove();
-    }
-    window[cbName] = (data) => { cleanup(); resolve(data); };
-    script.src = url + sep + 'callback=' + cbName;
-    script.onerror = () => { cleanup(); reject(new Error('jsonp error')); };
-    document.head.appendChild(script);
-  });
-}
-
 /** 标题归一化：去空格、书名号、常见干扰词，用于跨渠道合并同一部番 */
 function normalizeTitle(name) {
   return String(name || '')
@@ -122,7 +104,10 @@ function escapeHtml(s) {
 async function searchChannel(ch, query) {
   const url = `${ch.api}?ac=detail&wd=${encodeURIComponent(query)}`;
   let data = null;
-  for (const { u } of candidateUrls(url)) {
+  let cands = candidateUrls(url);
+  // 线上模式：未开放跨域的渠道直连必被浏览器拦，直接先走本机代理候选，省一次注定失败的请求
+  if (IS_REMOTE && !ch.cors) cands = [...cands.filter(c => c.wrap), ...cands.filter(c => !c.wrap)];
+  for (const { u } of cands) {
     if (data) break;
     try {
       const res = await fetchTimeout(u);
@@ -132,15 +117,7 @@ async function searchChannel(ch, query) {
       console.warn(`[渠道 ${ch.name}] 请求失败:`, e.message);
     }
   }
-  if (!data) {
-    // JSONP 兜底（script 标签不受 CORS 限制，前提是接口支持 callback 参数）
-    try {
-      data = await jsonp(url);
-    } catch (e2) {
-      console.warn(`[渠道 ${ch.name}] 搜索失败（含JSONP兜底）`);
-      return [];
-    }
-  }
+  if (!data) return [];   // JSONP 已实测各接口均不支持（callback 参数被忽略），不再浪费时间兜底
   const list = (data && data.list) || [];
   return list.map(v => ({
     id: String(v.vod_id),
@@ -154,34 +131,56 @@ async function searchChannel(ch, query) {
   })).filter(v => v.name);
 }
 
-/** 搜索并按标题合并多渠道结果 */
-async function searchAll(query) {
-  const results = await Promise.all(CHANNELS.map(ch => searchChannel(ch, query).catch(() => [])));
-  const flat = results.flat();
-  // 过滤明显不是动漫的（包含电影/电视剧通用内容时尽量靠用户关键词自然筛选，这里只做轻过滤）
+/** 搜索并按标题合并多渠道结果（渐进式：每有个渠道返回就回调 onPartial，不等全部）
+ *  返回 Promise<完整列表>；总时限 SEARCH_DEADLINE 到点先行返回，慢渠道后台继续补渲染 */
+async function searchAll(query, onPartial) {
   const map = new Map();
-  for (const v of flat) {
-    const key = normalizeTitle(v.name);
-    if (!key) continue;
-    if (!map.has(key)) {
-      map.set(key, { ...v, channels: [{ id: v.id, channel: v.channel, episodes: v.episodes }], sources: [v.channel.name] });
-    } else {
-      const item = map.get(key);
-      // 优先保留带封面的那条作为展示主体
-      if (!item.pic && v.pic) Object.assign(item, { pic: v.pic, remark: v.remark || item.remark, year: v.year || item.year });
-      if (!item.episodes || !item.episodes.length) item.episodes = v.episodes;
-      if (!item.channels.some(c => c.channel.key === v.channel.key)) {
-        item.channels.push({ id: v.id, channel: v.channel, episodes: v.episodes });
-        item.sources.push(v.channel.name);
+
+  const merged = () => {
+    const list = [...map.values()];
+    // 渠道排序：开放跨域的渠道（线上可直连）排前面，优先检测优先播放
+    for (const it of list) {
+      it.channels.sort((a, b) => (b.channel.cors ? 1 : 0) - (a.channel.cors ? 1 : 0));
+    }
+    return list;
+  };
+
+  /** 把一个渠道的结果并进 map */
+  const absorb = (results) => {
+    for (const v of results) {
+      const key = normalizeTitle(v.name);
+      if (!key) continue;
+      if (!map.has(key)) {
+        map.set(key, { ...v, channels: [{ id: v.id, channel: v.channel, episodes: v.episodes }], sources: [v.channel.name] });
+      } else {
+        const item = map.get(key);
+        // 优先保留带封面的那条作为展示主体
+        if (!item.pic && v.pic) Object.assign(item, { pic: v.pic, remark: v.remark || item.remark, year: v.year || item.year });
+        if (!item.episodes || !item.episodes.length) item.episodes = v.episodes;
+        if (!item.channels.some(c => c.channel.key === v.channel.key)) {
+          item.channels.push({ id: v.id, channel: v.channel, episodes: v.episodes });
+          item.sources.push(v.channel.name);
+        }
       }
     }
-  }
-  const list = [...map.values()];
-  // 渠道排序：开放跨域的渠道（线上可直连）排前面，优先检测优先播放
-  for (const it of list) {
-    it.channels.sort((a, b) => (b.channel.cors ? 1 : 0) - (a.channel.cors ? 1 : 0));
-  }
-  return list;
+  };
+
+  let doneCount = 0;
+  const jobs = CHANNELS.map(async (ch) => {
+    try {
+      const results = await searchChannel(ch, query).catch(() => []);
+      if (results.length) {
+        absorb(results);
+        if (onPartial) onPartial(merged(), ch, CHANNELS.length - doneCount - 1);
+      }
+    } finally {
+      doneCount++;
+    }
+  });
+
+  // 总时限兜底：到点先把已有结果交出去；未完成的渠道在后台继续，结果仍会经 onPartial 增量补上
+  await Promise.race([Promise.all(jobs), new Promise(r => setTimeout(r, SEARCH_DEADLINE))]);
+  return merged();
 }
 
 /* ---------------- 详情与解析 ---------------- */
@@ -196,9 +195,7 @@ async function fetchDetail(ch, id) {
       data = await res.json();
     } catch (e) { /* 试下一个候选 */ }
   }
-  if (!data && !IS_LOCAL_SERVER) {
-    data = await jsonp(url);
-  }
+  if (!data) throw new Error('详情接口不可达');
   const v = data && data.list && data.list[0];
   if (!v) throw new Error('详情为空');
   return v;
@@ -601,28 +598,10 @@ function renderResults(items) {
 
 /* ---------------- 搜索入口 ---------------- */
 let searching = false;
+let searchSeq = 0;   // 搜索序号：过期搜索（被新搜索取代/超时后后台补结果）不再渲染
 
-async function doSearch(query) {
-  query = String(query || '').trim();
-  if (!query) { toast('先输入想看的动漫名字喵～', 'warn'); return; }
-  if (searching) return;
-  searching = true;
-
-  $('resultSection').classList.add('hidden');
-  $('emptyArea').classList.add('hidden');
-  $('statusArea').classList.remove('hidden');
-  $('statusText').textContent = `正在翻遍 ${CHANNELS.length} 个渠道找「${query}」…`;
-  $('searchInput').value = query;
-
-  let items = [];
-  try {
-    items = await searchAll(query);
-  } finally {
-    searching = false;
-    $('statusArea').classList.add('hidden');
-  }
-
-  // 轻过滤：去掉片名与关键词完全无关的（避免搜"千与千寻"出无关剧）
+/** 过滤 + 存 lastResults（doSearch 与渐进回调共用） */
+function applyResults(items, query) {
   const q = normalizeTitle(query);
   const related = items.filter(it => {
     const n = it.name.toLowerCase();
@@ -630,14 +609,52 @@ async function doSearch(query) {
            q.includes(normalizeTitle(n).slice(0, Math.max(2, n.length - 1)));
   });
   lastResults = related.length ? related : items;   // 保留全量，排序/截断交给 renderResults
-
-  if (!lastResults.length) {
-    $('emptyArea').classList.remove('hidden');
-    $('emptyText').textContent = `没有在 ${CHANNELS.length} 个渠道找到「${query}」喵… 换个名字试试？`;
-  } else {
-    renderResults(lastResults);
-  }
   return lastResults;
+}
+
+async function doSearch(query) {
+  query = String(query || '').trim();
+  if (!query) { toast('先输入想看的动漫名字喵～', 'warn'); return; }
+  if (searching) return;
+  searching = true;
+  const seq = ++searchSeq;
+
+  $('resultSection').classList.add('hidden');
+  $('emptyArea').classList.add('hidden');
+  $('statusArea').classList.remove('hidden');
+  $('statusText').textContent = `正在翻遍 ${CHANNELS.length} 个渠道找「${query}」…`;
+  $('searchInput').value = query;
+
+  // 渐进式渲染：任一渠道先回来就先出卡片，不等最慢的渠道
+  const onPartial = (partial, _ch, pending) => {
+    if (seq !== searchSeq) return;   // 已被更新的搜索取代
+    const list = applyResults(partial, query);
+    if (list.length) {
+      $('emptyArea').classList.add('hidden');
+      renderResults(list);
+    }
+    if (pending > 0) {
+      $('statusArea').classList.remove('hidden');
+      $('statusText').textContent = `🌸 已找到 ${list.length} 部，还在翻剩余 ${pending} 个渠道…`;
+    } else {
+      $('statusArea').classList.add('hidden');
+    }
+  };
+
+  try {
+    const items = await searchAll(query, onPartial);
+    if (seq !== searchSeq) return;
+    const list = applyResults(items, query);
+    $('statusArea').classList.add('hidden');
+    if (!list.length) {
+      $('emptyArea').classList.remove('hidden');
+      $('emptyText').textContent = `没有在 ${CHANNELS.length} 个渠道找到「${query}」喵… 换个名字试试？`;
+    } else {
+      renderResults(list);
+    }
+  } finally {
+    if (seq === searchSeq) searching = false;
+  }
 }
 
 /* ---------------- 事件绑定 ---------------- */
