@@ -97,16 +97,21 @@ function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-/* ---------------- 搜索：多渠道并行 ---------------- */
+/* ---------------- 搜索：多渠道并行 ----------------
+ * 用 ac=detail&wd= 一步到位：搜索结果自带全部剧集地址(vod_play_url)，
+ * 播放时无需再请求 ac=detail&ids=（实测暴风该接口不带 ACAO 跨域头，线上会被拦，
+ * 且响应极慢 50s+），整个流程压缩为「1 次搜索 + 1 次视频探测」。 */
 async function searchChannel(ch, query) {
-  const url = `${ch.api}?ac=videolist&wd=${encodeURIComponent(query)}`;
+  const url = `${ch.api}?ac=detail&wd=${encodeURIComponent(query)}`;
   let data = null;
-  try {
-    const res = await fetchTimeout(px(url));
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    data = await res.json();
-  } catch (e) {
-    console.warn(`[渠道 ${ch.name}] 请求失败:`, e.message);
+  for (let attempt = 0; attempt < 2 && !data; attempt++) {
+    try {
+      const res = await fetchTimeout(px(url));
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      data = await res.json();
+    } catch (e) {
+      console.warn(`[渠道 ${ch.name}] 请求失败(第${attempt + 1}次):`, e.message);
+    }
   }
   if (!data) {
     // JSONP 兜底（script 标签不受 CORS 限制，前提是接口支持 callback 参数）
@@ -126,6 +131,7 @@ async function searchChannel(ch, query) {
     year: String(v.vod_year || '').trim(),
     cls: String(v.vod_class || '').trim(),
     channel: ch,
+    episodes: parseEpisodes(v),   // 搜索时预解析剧集，播放时免再查详情
   })).filter(v => v.name);
 }
 
@@ -139,13 +145,14 @@ async function searchAll(query) {
     const key = normalizeTitle(v.name);
     if (!key) continue;
     if (!map.has(key)) {
-      map.set(key, { ...v, channels: [{ id: v.id, channel: v.channel }], sources: [v.channel.name] });
+      map.set(key, { ...v, channels: [{ id: v.id, channel: v.channel, episodes: v.episodes }], sources: [v.channel.name] });
     } else {
       const item = map.get(key);
       // 优先保留带封面的那条作为展示主体
       if (!item.pic && v.pic) Object.assign(item, { pic: v.pic, remark: v.remark || item.remark, year: v.year || item.year });
+      if (!item.episodes || !item.episodes.length) item.episodes = v.episodes;
       if (!item.channels.some(c => c.channel.key === v.channel.key)) {
-        item.channels.push({ id: v.id, channel: v.channel });
+        item.channels.push({ id: v.id, channel: v.channel, episodes: v.episodes });
         item.sources.push(v.channel.name);
       }
     }
@@ -204,19 +211,22 @@ const availCache = new Map(); // key: `${ch.key}:${id}:${epIdx|all}` -> {ok, epi
 
 /**
  * 检测某个渠道某部番是否真的可播：
- * 1) 详情接口能返回数据
+ * 1) 有剧集数据（搜索时已带 或 现查详情）
  * 2) 剧集列表非空且含视频地址
  * 3) 探测目标集视频地址确实可达（HTTP 200 且有内容）
  * 全部通过才返回 ok
  */
-async function detectChannel(ch, id, epIdx = 0) {
+async function detectChannel(ch, id, epIdx = 0, preEpisodes = null) {
   const cacheKey = `${ch.key}:${id}:${epIdx}`;
   if (availCache.has(cacheKey)) return availCache.get(cacheKey);
 
   let result = { ok: false, episodes: [], note: '' };
   try {
-    const vod = await fetchDetail(ch, id);
-    const episodes = parseEpisodes(vod);
+    let episodes = (preEpisodes && preEpisodes.length) ? preEpisodes : null;
+    if (!episodes) {
+      const vod = await fetchDetail(ch, id);
+      episodes = parseEpisodes(vod);
+    }
     if (!episodes.length) {
       result.note = '无剧集资源';
     } else {
@@ -371,7 +381,7 @@ async function tryChannel(idx, epIdx = 0) {
   setPanel('detectPanel');
   $('detectText').textContent = `正在检测「${channels[idx].channel.name}」的播放源是否真的可播…`;
 
-  const det = await detectChannel(channels[idx].channel, channels[idx].id, epIdx);
+  const det = await detectChannel(channels[idx].channel, channels[idx].id, epIdx, channels[idx].episodes);
 
   if (det.ok) {
     channelStatus[idx] = 'ok';
