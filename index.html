@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>喵呜动漫 🌸 · 可爱动漫搜索播放</title>
+<link rel="stylesheet" href="style.css?v=4">
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
+</head>
+<body>
+
+<!-- 背景装饰 -->
+<div class="bg-deco" aria-hidden="true">
+  <span class="cloud c1">☁️</span>
+  <span class="cloud c2">☁️</span>
+  <span class="star s1">⭐</span>
+  <span class="star s2">✨</span>
+  <span class="star s3">💫</span>
+  <span class="star s4">🌸</span>
+  <span class="star s5">🌸</span>
+</div>
+
+<header class="site-header">
+  <div class="logo-wrap">
+    <!-- Q版猫娘吉祥物 -->
+    <svg class="mascot" viewBox="0 0 120 120" width="88" height="88" aria-label="看板娘喵呜">
+      <ellipse cx="60" cy="108" rx="34" ry="7" fill="rgba(255,150,190,.35)"/>
+      <!-- 耳朵 -->
+      <path d="M28 42 L34 14 L52 32 Z" fill="#ffb6d5" stroke="#e5608f" stroke-width="3" stroke-linejoin="round"/>
+      <path d="M92 42 L86 14 L68 32 Z" fill="#ffb6d5" stroke="#e5608f" stroke-width="3" stroke-linejoin="round"/>
+      <path d="M33 36 L36 22 L46 32 Z" fill="#ff8fb8"/>
+      <path d="M87 36 L84 22 L74 32 Z" fill="#ff8fb8"/>
+      <!-- 脸 -->
+      <circle cx="60" cy="66" r="38" fill="#fff0f6" stroke="#e5608f" stroke-width="3"/>
+      <!-- 腮红 -->
+      <ellipse cx="36" cy="76" rx="8" ry="5" fill="#ffb6d5"/>
+      <ellipse cx="84" cy="76" rx="8" ry="5" fill="#ffb6d5"/>
+      <!-- 眼睛 -->
+      <circle cx="46" cy="62" r="5.5" fill="#5a3b4a"/>
+      <circle cx="74" cy="62" r="5.5" fill="#5a3b4a"/>
+      <circle cx="48" cy="60" r="1.8" fill="#fff"/>
+      <circle cx="76" cy="60" r="1.8" fill="#fff"/>
+      <!-- 嘴 -->
+      <path d="M56 76 Q60 80 64 76" fill="none" stroke="#e5608f" stroke-width="2.5" stroke-linecap="round"/>
+      <path d="M57 71 q1.5 2 0 4 M63 71 q-1.5 2 0 4" stroke="#e5608f" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      <!-- 蝴蝶结 -->
+      <path d="M86 34 q8 -8 12 0 q8 -6 8 4 q0 8 -10 6 q-8 0 -10 -10z" fill="#ff6fa5" stroke="#d94b83" stroke-width="2"/>
+    </svg>
+    <div class="logo-text">
+      <h1>喵呜动漫 <span class="paw">🐾</span></h1>
+      <p class="slogan">搜一搜，马上看～ 多渠道自动找片喵！</p>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- 搜索区 -->
+  <section class="search-section">
+    <div class="search-box">
+      <span class="search-icon">🔍</span>
+      <input id="searchInput" type="text" placeholder="想看什么动漫呀？例如：海贼王、火影忍者、千与千寻…" autocomplete="off">
+      <button id="searchBtn" class="btn-candy" title="搜索">搜番！</button>
+    </div>
+    <div class="hot-chips">
+      <span class="chip-label">热门：</span>
+      <button class="chip" data-q="海贼王">航海王</button>
+      <button class="chip" data-q="火影忍者">火影忍者</button>
+      <button class="chip" data-q="千与千寻">千与千寻</button>
+      <button class="chip" data-q="咒术回战">咒术回战</button>
+      <button class="chip" data-q="鬼灭之刃">鬼灭之刃</button>
+    </div>
+  </section>
+
+  <!-- 状态提示 -->
+  <section id="statusArea" class="status-area hidden">
+    <div class="status-card">
+      <div class="spinner">🐱</div>
+      <p id="statusText">正在搜索中…</p>
+    </div>
+  </section>
+
+  <!-- 最近在看 -->
+  <section id="historySection" class="history-section hidden">
+    <h2 class="section-title">📌 最近在看</h2>
+    <div id="historyList" class="history-list"></div>
+  </section>
+
+  <!-- 搜索结果 -->
+  <section id="resultSection" class="result-section hidden">
+    <div class="result-head">
+      <h2 class="section-title">🌸 搜索结果 <span id="resultCount" class="count-badge"></span></h2>
+      <div class="sort-bar">
+        <span class="sort-label">🔍 筛选：</span>
+        <select id="sortSelect" class="sort-select" title="结果排序方式">
+          <option value="year-desc" selected>最近时间 ↓（默认）</option>
+          <option value="year-asc">最早时间 ↑</option>
+          <option value="src-desc">渠道最多 ↓</option>
+          <option value="name-asc">名称 A→Z</option>
+        </select>
+      </div>
+    </div>
+    <div id="resultGrid" class="result-grid"></div>
+  </section>
+
+  <!-- 空状态 / 错误 -->
+  <section id="emptyArea" class="empty-area hidden">
+    <div class="empty-card">
+      <div class="empty-face">(;´д`)</div>
+      <p id="emptyText">没有找到想看的动漫喵…换个名字试试？</p>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <p>🌸 喵呜动漫 · 内容来自公开网络资源聚合，仅供学习交流 · 建议支持正版 🌸</p>
+</footer>
+
+<!-- 播放弹窗 -->
+<div id="playerModal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-mask" id="modalMask"></div>
+  <div class="modal-body">
+    <button class="modal-close" id="modalClose" title="关闭">✖</button>
+
+    <div class="modal-head">
+      <img id="mCover" class="modal-cover" src="" alt="">
+      <div class="modal-info">
+        <h2 id="mTitle">加载中…</h2>
+        <p id="mMeta" class="m-meta"></p>
+        <!-- 渠道切换 -->
+        <div id="channelTabs" class="channel-tabs"></div>
+      </div>
+    </div>
+
+    <!-- 检测中 -->
+    <div id="detectPanel" class="detect-panel">
+      <div class="spinner">🐾</div>
+      <p id="detectText">正在检测播放源是否可播…</p>
+    </div>
+
+    <!-- 播放失败 / 全部不可用 -->
+    <div id="failPanel" class="fail-panel hidden">
+      <div class="empty-face">(´；ω；`)</div>
+      <p id="failText">这个渠道暂时播不了喵…</p>
+      <button id="retryBtn" class="btn-candy">🔄 换源重试</button>
+    </div>
+
+    <!-- 播放器 -->
+    <div id="playPanel" class="play-panel hidden">
+      <div class="player-wrap">
+        <video id="videoPlayer" controls playsinline></video>
+      </div>
+      <div class="play-toolbar">
+        <button id="prevEp" class="btn-soft">⬅ 上一集</button>
+        <span id="epNow" class="ep-now">-</span>
+        <button id="nextEp" class="btn-soft">下一集 ➡</button>
+      </div>
+      <div class="ep-block">
+        <h3>🎬 选集 <span id="epCount" class="count-badge"></span></h3>
+        <div id="epList" class="ep-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 轻提示 -->
+<div id="toastBox" class="toast-box"></div>
+
+<script src="app.js?v=5"></script>
+</body>
+</html>
