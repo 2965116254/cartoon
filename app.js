@@ -7,28 +7,31 @@
 'use strict';
 
 /* ---------------- 渠道配置（增删渠道只需改这里） ----------------
- * 全部经过实测（搜索→详情→m3u8首集探测通过，2026-10-26）
+ * cors: 该渠道 API 是否自带 Access-Control-Allow-Origin: *（实测 2026-10-26）
+ *   - 本地 serve.py：所有渠道都能用（走 /proxy 本地代理）
+ *   - GitHub Pages 线上：只有 cors:true 的渠道可直连搜索/播放；
+ *     其余渠道 API 无跨域许可，浏览器直接拦截（线上会自动跳过，不浪费时间）
  */
 const CHANNELS = [
-  { key: 'baofeng',   name: '暴风源',   api: 'https://bfzyapi.com/api.php/provide/vod' },
-  { key: 'zy360',     name: '360源',    api: 'https://360zy.com/api.php/provide/vod' },
-  { key: 'zy360alt',  name: '360备用',  api: 'https://360zy5.com/api.php/provide/vod' },
-  { key: 'zuida',     name: '最大源',   api: 'https://api.zuidapi.com/api.php/provide/vod' },
-  { key: 'hongniu',   name: '红牛源',   api: 'https://www.hongniuzy3.com/api.php/provide/vod' },
-  { key: 'jrs',       name: 'JRS源',    api: 'https://jszyapi.com/api.php/provide/vod' },
-  { key: 'subo',      name: '速播源',   api: 'https://www.subozy.com/api.php/provide/vod' },
-  { key: 'uku',       name: 'uku源',    api: 'https://api.ukuapi88.com/api.php/provide/vod' },
+  { key: 'baofeng',   name: '暴风源',   api: 'https://bfzyapi.com/api.php/provide/vod', cors: true },
+  { key: 'zy360',     name: '360源',    api: 'https://360zy.com/api.php/provide/vod', cors: false },
+  { key: 'zy360alt',  name: '360备用',  api: 'https://360zy5.com/api.php/provide/vod', cors: false },
+  { key: 'zuida',     name: '最大源',   api: 'https://api.zuidapi.com/api.php/provide/vod', cors: false },
+  { key: 'hongniu',   name: '红牛源',   api: 'https://www.hongniuzy3.com/api.php/provide/vod', cors: false },
+  { key: 'jrs',       name: 'JRS源',    api: 'https://jszyapi.com/api.php/provide/vod', cors: false },
+  { key: 'subo',      name: '速播源',   api: 'https://www.subozy.com/api.php/provide/vod', cors: false },
+  { key: 'uku',       name: 'uku源',    api: 'https://api.ukuapi88.com/api.php/provide/vod', cors: false },
 ];
 
 const TIMEOUT_SEARCH = 8000;   // 搜索超时 8s
 const TIMEOUT_DETECT = 8000;   // 播放检测超时 8s
 const LS_HISTORY = 'meow_anime_history';
 
-/* ---------------- 代理策略（三种运行环境） ----------------
- * 1. 本地 serve.py（localhost）：一切走 /proxy?url= 本地代理，最稳；
- * 2. GitHub Pages 等线上静态托管（https）：无本地代理 →
- *    接口类请求优先 JSONP（script 标签不受 CORS 限制），失败再试公共 CORS 代理；
- *    视频(m3u8)走公共 CORS 代理（hls.js xhrSetup 包裹），免费公共代理速度/稳定性有限；
+/* ---------------- 运行环境与代理策略 ----------------
+ * 1. 本地 serve.py（localhost）：一切走 /proxy?url= 本地代理，全渠道可用，最稳；
+ * 2. GitHub Pages 线上（https）：无本地代理，公共 CORS 代理已实测全灭
+ *    （corsproxy.io 要 key、codetabs/allorigins 国内超时）→ 策略改为「直连 + 开放跨域渠道优先」：
+ *    cors:true 渠道（如暴风）API 和视频 CDN 都自带跨域许可，直连即可完整搜+播；
  * 3. file:// 直开：全部直连，大部分渠道会被浏览器拦截（不推荐，会弹提示）。
  */
 const IS_LOCAL_SERVER = ['127.0.0.1', 'localhost'].includes(location.hostname)
@@ -37,24 +40,6 @@ const IS_REMOTE = location.protocol === 'https:' && !IS_LOCAL_SERVER;
 
 function px(url) {
   return IS_LOCAL_SERVER ? '/proxy?url=' + encodeURIComponent(url) : url;
-}
-
-/* 公共 CORS 代理（线上模式用，免费但不保证稳定，按顺序尝试） */
-const PUBLIC_PROXIES = [
-  u => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
-  u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u),
-  u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
-];
-let activePublicProxy = null;   // 检测阶段成功的那一个，播放时优先用它
-
-/** 返回一次请求的候选地址列表：[{u: 地址, wrap: 使用的代理函数或null}] */
-function fetchCandidates(url) {
-  if (IS_LOCAL_SERVER) return [{ u: px(url), wrap: null }];
-  if (IS_REMOTE) return [
-    ...PUBLIC_PROXIES.map(f => ({ u: f(url), wrap: f })),
-    { u: url, wrap: null },   // 直连兜底（若源站本身允许跨域）
-  ];
-  return [{ u: url, wrap: null }];
 }
 
 /* ---------------- 工具 ---------------- */
@@ -116,19 +101,15 @@ function escapeHtml(s) {
 async function searchChannel(ch, query) {
   const url = `${ch.api}?ac=videolist&wd=${encodeURIComponent(query)}`;
   let data = null;
-  for (const { u, wrap } of fetchCandidates(url)) {
-    try {
-      const res = await fetchTimeout(u);
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      data = await res.json();
-      if (wrap) activePublicProxy = wrap;
-      break;
-    } catch (e) {
-      console.warn(`[渠道 ${ch.name}] 候选请求失败:`, e.message);
-    }
+  try {
+    const res = await fetchTimeout(px(url));
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    data = await res.json();
+  } catch (e) {
+    console.warn(`[渠道 ${ch.name}] 请求失败:`, e.message);
   }
   if (!data) {
-    // JSONP 兜底（script 标签不受 CORS 限制，线上模式也有效，前提是接口支持 callback 参数）
+    // JSONP 兜底（script 标签不受 CORS 限制，前提是接口支持 callback 参数）
     try {
       data = await jsonp(url);
     } catch (e2) {
@@ -169,24 +150,26 @@ async function searchAll(query) {
       }
     }
   }
-  return [...map.values()];
+  const list = [...map.values()];
+  // 渠道排序：开放跨域的渠道（线上可直连）排前面，优先检测优先播放
+  for (const it of list) {
+    it.channels.sort((a, b) => (b.channel.cors ? 1 : 0) - (a.channel.cors ? 1 : 0));
+  }
+  return list;
 }
 
 /* ---------------- 详情与解析 ---------------- */
 async function fetchDetail(ch, id) {
   const url = `${ch.api}?ac=videolist&ids=${encodeURIComponent(id)}`;
   let data = null;
-  for (const { u, wrap } of fetchCandidates(url)) {
-    try {
-      const res = await fetchTimeout(u);
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      data = await res.json();
-      if (wrap) activePublicProxy = wrap;
-      break;
-    } catch (e) { /* 试下一个候选 */ }
-  }
-  if (!data && !IS_LOCAL_SERVER) {
-    data = await jsonp(url);
+  try {
+    const res = await fetchTimeout(px(url));
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    data = await res.json();
+  } catch (e) {
+    if (!IS_LOCAL_SERVER) {
+      data = await jsonp(url);   // 非本地模式下 JSONP 兜底
+    }
   }
   const v = data && data.list && data.list[0];
   if (!v) throw new Error('详情为空');
@@ -252,28 +235,25 @@ async function detectChannel(ch, id, epIdx = 0) {
   return result;
 }
 
-/** 探测视频地址：请求成功且拿到首块内容才算可用 */
+/** 探测视频地址：请求成功且拿到首块内容才算可用
+ *  线上模式直连：暴风/红牛/JRS 的视频 CDN 自带 ACAO:*，无需代理；
+ *  CDN 不开放跨域的渠道会探测失败 → 自动换源到可用的渠道。 */
 async function probeVideoUrl(url) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_DETECT);
-  let lastNote = '';
   try {
-    for (const { u, wrap } of fetchCandidates(url)) {
-      try {
-        const res = await fetch(u, { signal: ctrl.signal });
-        if (!res.ok) { lastNote = 'HTTP ' + res.status; continue; }
-        // m3u8 必须是文本且包含片段；mp4 拿到响应即可
-        if (/\.m3u8/i.test(url)) {
-          const text = await res.text();
-          if (!/#EXTM3U|#EXT-X/i.test(text)) { lastNote = 'm3u8 内容无效'; continue; }
-        }
-        if (wrap) activePublicProxy = wrap;
-        return { ok: true };
-      } catch (e) {
-        lastNote = e.name === 'AbortError' ? '响应超时' : '网络受限/不可达';
-      }
+    const res = await fetch(px(url), { signal: ctrl.signal });
+    if (!res.ok) return { ok: false, note: 'HTTP ' + res.status };
+    // m3u8 必须是文本且包含片段；mp4 拿到响应即可
+    if (/\.m3u8/i.test(url)) {
+      const text = await res.text();
+      if (!/#EXTM3U|#EXT-X/i.test(text)) return { ok: false, note: 'm3u8 内容无效' };
+      return { ok: true };
     }
-    return { ok: false, note: lastNote || '不可达' };
+    return { ok: true };
+  } catch (e) {
+    // CORS 拦截 / 超时 —— 播放器(hls.js)同样走跨域，基本也会失败，判定不可用
+    return { ok: false, note: e.name === 'AbortError' ? '响应超时' : '网络受限/不可达' };
   } finally {
     clearTimeout(timer);
   }
@@ -295,14 +275,8 @@ async function playVideo(url) {
   const v = $('videoPlayer');
   destroyHls();
   if (window.Hls && Hls.isSupported() && /\.m3u8/i.test(url)) {
-    const cfg = { maxBufferLength: 30 };
-    if (IS_REMOTE) {
-      // 线上模式：hls 的清单/分片请求全部包一层公共代理（xhrSetup 在 open 之前调用，可重写地址）
-      const wrap = activePublicProxy || PUBLIC_PROXIES[0];
-      cfg.xhrSetup = (xhr, u) => { if (!xhr.readyState) xhr.open('GET', wrap(u), true); };
-    }
-    hlsInstance = new Hls(cfg);
-    hlsInstance.loadSource(IS_LOCAL_SERVER ? px(url) : url);
+    hlsInstance = new Hls({ maxBufferLength: 30 });
+    hlsInstance.loadSource(px(url));
     hlsInstance.attachMedia(v);
     hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
     hlsInstance.on(Hls.Events.ERROR, (_, data) => {
@@ -312,7 +286,7 @@ async function playVideo(url) {
       }
     });
   } else {
-    v.src = IS_LOCAL_SERVER ? px(url) : url;
+    v.src = px(url);
     v.play().catch(() => {});
     v.onerror = () => { toast('播放出错了，试试换一个渠道喵…', 'err'); autoSwitchChannel(); };
   }
@@ -360,7 +334,10 @@ function renderChannelTabs() {
     const btn = document.createElement('button');
     btn.className = 'ch-tab' + (i === modalChannelIdx ? ' active' : '');
     const icon = { pending: '⏳', ok: '✅', fail: '❌', current: '▶️' }[channelStatus[i]] || '⏳';
-    btn.innerHTML = `<span class="dot">${icon}</span>${escapeHtml(c.channel.name)}`;
+    // 🌐=线上可直连的渠道 / 💻=仅本地代理模式可用
+    const env = c.channel.cors ? '🌐' : '💻';
+    btn.title = c.channel.cors ? '该渠道开放跨域，线上/本地都能播' : '该渠道需本地代理（python serve.py），线上不可用';
+    btn.innerHTML = `<span class="dot">${icon}</span>${env}${escapeHtml(c.channel.name)}`;
     btn.onclick = () => {
       if (channelStatus[i] === 'fail') { toast(`${c.channel.name} 检测不可用，已跳过喵`, 'warn'); return; }
       tryChannel(i);
@@ -647,5 +624,5 @@ renderHistory();
 if (!IS_LOCAL_SERVER && !IS_REMOTE) {
   toast('当前是直接打开模式，多渠道会被浏览器拦截喵！请用 python serve.py 启动，或部署到 GitHub Pages 观看', 'warn', 8000);
 } else if (IS_REMOTE) {
-  toast('线上模式：接口与视频经公共跨域代理转发，速度可能比本地慢一些喵～', '', 5000);
+  toast('线上模式：🌐 渠道可直连播放；💻 渠道需要本地代理，线上会自动跳过', '', 5000);
 }
