@@ -42,6 +42,24 @@ function px(url) {
   return IS_LOCAL_SERVER ? '/proxy?url=' + encodeURIComponent(url) : url;
 }
 
+/* 线上模式的补救通道：若本机恰好运行着 serve.py（默认 8081 端口），
+ * 页面可以借用 http://127.0.0.1:8081/proxy 转发（serve.py 的代理自带跨域许可，
+ * 且 Chrome/Edge 允许 https 页面访问 localhost）。
+ * 典型场景：电脑开了 Clash 等系统代理，浏览器直连国内视频 CDN 被代理带出国被拒，
+ * 而本机 serve.py 是强制直连的 —— 借道即可播放。其他设备无 serve.py 时自动跳过。 */
+const LOCAL_PROXIES = ['http://127.0.0.1:8081/proxy?url='];
+
+/** 一次请求的候选地址：[{u, wrap}] wrap= 把任意地址转成该通道地址的函数(null=直连) */
+function candidateUrls(url) {
+  if (IS_LOCAL_SERVER) return [{ u: px(url), wrap: null }];
+  if (IS_REMOTE) {
+    const list = [{ u: url, wrap: null }];   // 先直连（开放跨域的渠道直接成功）
+    for (const b of LOCAL_PROXIES) list.push({ u: b + encodeURIComponent(url), wrap: u2 => b + encodeURIComponent(u2) });
+    return list;
+  }
+  return [{ u: url, wrap: null }];
+}
+
 /* ---------------- 工具 ---------------- */
 const $ = (id) => document.getElementById(id);
 
@@ -104,13 +122,14 @@ function escapeHtml(s) {
 async function searchChannel(ch, query) {
   const url = `${ch.api}?ac=detail&wd=${encodeURIComponent(query)}`;
   let data = null;
-  for (let attempt = 0; attempt < 2 && !data; attempt++) {
+  for (const { u } of candidateUrls(url)) {
+    if (data) break;
     try {
-      const res = await fetchTimeout(px(url));
+      const res = await fetchTimeout(u);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       data = await res.json();
     } catch (e) {
-      console.warn(`[渠道 ${ch.name}] 请求失败(第${attempt + 1}次):`, e.message);
+      console.warn(`[渠道 ${ch.name}] 请求失败:`, e.message);
     }
   }
   if (!data) {
@@ -169,14 +188,16 @@ async function searchAll(query) {
 async function fetchDetail(ch, id) {
   const url = `${ch.api}?ac=videolist&ids=${encodeURIComponent(id)}`;
   let data = null;
-  try {
-    const res = await fetchTimeout(px(url));
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    data = await res.json();
-  } catch (e) {
-    if (!IS_LOCAL_SERVER) {
-      data = await jsonp(url);   // 非本地模式下 JSONP 兜底
-    }
+  for (const { u } of candidateUrls(url)) {
+    if (data) break;
+    try {
+      const res = await fetchTimeout(u);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      data = await res.json();
+    } catch (e) { /* 试下一个候选 */ }
+  }
+  if (!data && !IS_LOCAL_SERVER) {
+    data = await jsonp(url);
   }
   const v = data && data.list && data.list[0];
   if (!v) throw new Error('详情为空');
@@ -233,6 +254,8 @@ async function detectChannel(ch, id, epIdx = 0, preEpisodes = null) {
       const ep = episodes[Math.min(epIdx, episodes.length - 1)];
       const probe = await probeVideoUrl(ep.url);
       if (probe.ok) {
+        // 若探测是借道本机代理成功的，把该渠道全部剧集地址都改写为同一通道
+        if (probe.wrap) episodes = episodes.map(e => ({ ...e, url: probe.wrap(e.url) }));
         result = { ok: true, episodes, note: '' };
       } else {
         result.note = probe.note;
@@ -245,25 +268,31 @@ async function detectChannel(ch, id, epIdx = 0, preEpisodes = null) {
   return result;
 }
 
-/** 探测视频地址：请求成功且拿到首块内容才算可用
- *  线上模式直连：暴风/红牛/JRS 的视频 CDN 自带 ACAO:*，无需代理；
- *  CDN 不开放跨域的渠道会探测失败 → 自动换源到可用的渠道。 */
+/** 探测视频地址：请求成功且拿到首块内容才算可用。
+ *  线上直连失败时自动尝试借用本机 serve.py 代理（127.0.0.1:8081）；
+ *  返回 wrap（成功的通道函数），调用方用它改写全部剧集地址。 */
 async function probeVideoUrl(url) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_DETECT);
+  let lastNote = '';
   try {
-    const res = await fetch(px(url), { signal: ctrl.signal });
-    if (!res.ok) return { ok: false, note: 'HTTP ' + res.status };
-    // m3u8 必须是文本且包含片段；mp4 拿到响应即可
-    if (/\.m3u8/i.test(url)) {
-      const text = await res.text();
-      if (!/#EXTM3U|#EXT-X/i.test(text)) return { ok: false, note: 'm3u8 内容无效' };
-      return { ok: true };
+    for (const { u, wrap } of candidateUrls(url)) {
+      try {
+        const res = await fetch(u, { signal: ctrl.signal });
+        if (!res.ok) { lastNote = 'HTTP ' + res.status; continue; }
+        // m3u8 必须是文本且包含片段；mp4 拿到响应即可
+        if (/\.m3u8/i.test(url)) {
+          const text = await res.text();
+          if (!/#EXTM3U|#EXT-X/i.test(text)) { lastNote = 'm3u8 内容无效'; continue; }
+        }
+        return { ok: true, wrap };
+      } catch (e) {
+        lastNote = e.name === 'AbortError'
+          ? '响应超时'
+          : '网络受限/不可达（若电脑开着 VPN/Clash 等代理，请关闭或把视频域名设为直连再试）';
+      }
     }
-    return { ok: true };
-  } catch (e) {
-    // CORS 拦截 / 超时 —— 播放器(hls.js)同样走跨域，基本也会失败，判定不可用
-    return { ok: false, note: e.name === 'AbortError' ? '响应超时' : '网络受限/不可达' };
+    return { ok: false, note: lastNote || '不可达' };
   } finally {
     clearTimeout(timer);
   }
