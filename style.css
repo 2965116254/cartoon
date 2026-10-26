@@ -275,6 +275,40 @@ main { max-width: 1060px; margin: 0 auto; padding: 10px 16px 40px; position: rel
   border-radius: 18px; overflow: hidden; box-shadow: var(--shadow);
 }
 .player-wrap video { width: 100%; height: 100%; display: block; background: transparent; }
+
+/* ---------- 横屏播放 ---------- */
+/* 伪横屏：iPhone Safari 没有 screen.orientation.lock，用 CSS 旋转 90° 铺满整屏，
+   手机横过来拿即得到横屏全屏（不受系统「竖排方向锁」影响） */
+.player-wrap.pseudo-landscape {
+  position: fixed;
+  top: 50%; left: 50%;
+  width: 100vh; height: 100vw;
+  max-width: none; max-height: none;
+  aspect-ratio: auto;
+  transform: translate(-50%, -50%) rotate(90deg);
+  transform-origin: center center;
+  border-radius: 0;
+  background: #000;
+  z-index: 120;
+  box-shadow: none;
+}
+body.pl-on { overflow: hidden; }
+body.pl-on .modal { z-index: 9999; padding: 0; }
+body.pl-on .modal-mask { background: #000; backdrop-filter: none; }
+body.pl-on .modal-body { max-height: none; overflow: visible; }
+body.pl-on .modal-close,
+body.pl-on .modal-head,
+body.pl-on .play-toolbar,
+body.pl-on .ep-block { visibility: hidden; }
+
+/* 伪横屏下的退出按钮（跟着容器一起旋转，出现在画面右上角） */
+.ls-exit {
+  position: absolute; top: 12px; right: 12px; z-index: 5;
+  border: 2px solid rgba(255,255,255,.55); background: rgba(0,0,0,.45);
+  color: #fff; font-size: 13px; padding: 6px 14px; border-radius: 999px;
+  cursor: pointer; backdrop-filter: blur(4px);
+}
+.ls-exit:hover { background: rgba(229,96,143,.75); }
 .play-toolbar {
   display: flex; align-items: center; justify-content: center; gap: 14px; margin: 14px 0 6px;
 }

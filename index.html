@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>喵呜动漫 🌸 · 可爱动漫搜索播放</title>
-<link rel="stylesheet" href="style.css?v=5">
+<link rel="stylesheet" href="style.css?v=6">
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 </head>
 <body>
@@ -151,12 +151,15 @@
     <!-- 播放器 -->
     <div id="playPanel" class="play-panel hidden">
       <div class="player-wrap">
-        <video id="videoPlayer" controls playsinline></video>
+        <video id="videoPlayer" controls playsinline webkit-playsinline></video>
+        <!-- 伪横屏（iPhone 无方向锁 API）时的退出按钮 -->
+        <button id="lsExit" class="ls-exit hidden" title="退出横屏">⤡ 退出横屏</button>
       </div>
       <div class="play-toolbar">
         <button id="prevEp" class="btn-soft">⬅ 上一集</button>
         <span id="epNow" class="ep-now">-</span>
         <button id="nextEp" class="btn-soft">下一集 ➡</button>
+        <button id="rotateBtn" class="btn-soft" title="横屏观看">⤢ 横屏</button>
       </div>
       <div class="ep-block">
         <h3>🎬 选集 <span id="epCount" class="count-badge"></span></h3>
@@ -169,6 +172,6 @@
 <!-- 轻提示 -->
 <div id="toastBox" class="toast-box"></div>
 
-<script src="app.js?v=10"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>

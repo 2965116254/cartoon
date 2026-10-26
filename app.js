@@ -328,6 +328,93 @@ async function playVideo(url) {
   }
 }
 
+/* ---------------- 横屏播放 ----------------
+ * 三种环境：
+ *  1. 桌面浏览器：普通全屏（F11 那种）；
+ *  2. 安卓：真全屏 + screen.orientation.lock('landscape')，真正锁横屏；
+ *  3. iPhone/iPad Safari：不支持 orientation.lock，也不支持元素全屏 →
+ *     用 CSS 伪横屏（容器旋转 90° 铺满屏幕），不受系统「竖排方向锁」限制。
+ */
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const IS_MOBILE = IS_IOS || /Android|Mobile/i.test(navigator.userAgent);
+let pseudoLandscape = false;
+
+function playerWrap() { return document.querySelector('.player-wrap'); }
+
+function updateRotateBtn() {
+  const on = pseudoLandscape || !!document.fullscreenElement;
+  const btn = $('rotateBtn');
+  if (!btn) return;
+  btn.textContent = on ? '⤡ 竖屏' : '⤢ 横屏';
+  btn.title = on ? '退出横屏' : '横屏观看';
+}
+
+function enterPseudoLandscape() {
+  const wrap = playerWrap();
+  if (!wrap) return;
+  pseudoLandscape = true;
+  wrap.classList.add('pseudo-landscape');
+  document.body.classList.add('pl-on');
+  $('lsExit').classList.remove('hidden');
+  updateRotateBtn();
+  toast('把手机横过来拿着看喵～', 'ok', 3000);
+}
+
+function exitPseudoLandscape() {
+  const wrap = playerWrap();
+  pseudoLandscape = false;
+  if (wrap) wrap.classList.remove('pseudo-landscape');
+  document.body.classList.remove('pl-on');
+  const exit = $('lsExit');
+  if (exit) exit.classList.add('hidden');
+  updateRotateBtn();
+}
+
+async function toggleLandscape() {
+  // 已横屏 → 退出
+  if (pseudoLandscape) { exitPseudoLandscape(); return; }
+  if (document.fullscreenElement) {
+    try { await document.exitFullscreen(); } catch (e) { /* ignore */ }
+    updateRotateBtn();
+    return;
+  }
+
+  const wrap = playerWrap();
+  if (!wrap) return;
+
+  // iPhone / iPad：直接伪横屏（元素全屏与方向锁均不可用）
+  if (IS_IOS) { enterPseudoLandscape(); return; }
+
+  // 桌面：普通全屏
+  if (!IS_MOBILE) {
+    try { await wrap.requestFullscreen(); } catch (e) { toast('当前浏览器不支持全屏喵…', 'warn'); }
+    updateRotateBtn();
+    return;
+  }
+
+  // 安卓：真全屏 + 锁横屏；锁失败则回退伪横屏
+  try {
+    if (wrap.requestFullscreen) await wrap.requestFullscreen();
+    else if (wrap.webkitRequestFullscreen) wrap.webkitRequestFullscreen();
+    else throw new Error('no fullscreen');
+    if (screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape');
+    else throw new Error('no orientation lock');
+    updateRotateBtn();
+  } catch (e) {
+    if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch (e2) { /* ignore */ } }
+    enterPseudoLandscape();
+  }
+}
+
+/** 彻底退出横屏（关弹窗时调用） */
+async function exitLandscapeAll() {
+  if (pseudoLandscape) exitPseudoLandscape();
+  if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch (e) { /* ignore */ } }
+  if (screen.orientation && screen.orientation.unlock) { try { screen.orientation.unlock(); } catch (e) { /* ignore */ } }
+  updateRotateBtn();
+}
+
 /* ---------------- 弹窗与渠道管理 ---------------- */
 let modalItem = null;          // 当前弹窗对应的条目
 let modalChannelIdx = 0;       // 当前尝试的渠道序号
@@ -357,6 +444,7 @@ function placeholderImg(name) {
 }
 
 function closeModal() {
+  exitLandscapeAll();   // 关弹窗前先退出横屏/全屏，避免旋转残留
   $('playerModal').classList.add('hidden');
   document.body.style.overflow = '';
   destroyHls();
@@ -535,6 +623,7 @@ openModal = function (item, epIdx = 0) {
   $('playerModal').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
   renderChannelTabs();
+  updateRotateBtn();
   tryChannel(0, resumeEpIdx);
 };
 
@@ -823,7 +912,15 @@ $('retryBtn').onclick = () => {
 };
 $('prevEp').onclick = () => { if (currentEpIdx > 0) playEpisode(currentEpIdx - 1, true); };
 $('nextEp').onclick = () => { if (currentEpIdx < currentEpisodes.length - 1) playEpisode(currentEpIdx + 1, true); };
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('playerModal').classList.contains('hidden')) closeModal(); });
+$('rotateBtn').onclick = toggleLandscape;
+$('lsExit').onclick = () => exitPseudoLandscape();
+document.addEventListener('fullscreenchange', updateRotateBtn);
+document.addEventListener('webkitfullscreenchange', updateRotateBtn);
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (pseudoLandscape) { exitPseudoLandscape(); return; }   // 横屏时 Esc 先退横屏
+  if (!$('playerModal').classList.contains('hidden')) closeModal();
+});
 $('sortSelect').onchange = () => renderResults(lastResults);
 
 renderHistory();
