@@ -42,6 +42,32 @@ const DIRECT_LIBRARY = [
   },
 ];
 
+/* 直链精选 · 批量库（directlib.json，由 _genlib.js 批量抽取+验证生成）
+ * 懒加载策略：页面打开即后台拉取（不阻塞首屏），搜索/联想时合并使用；
+ * 拉取失败静默降级为仅用内置 DIRECT_LIBRARY。 */
+const DIRECT_CHANNEL = { key: 'direct', name: '直链精选', cors: true, api: '' };
+let directDynamic = [];          // 批量库（解包后与 DIRECT_LIBRARY 同构）
+let directDynamicReady = null;   // 加载 Promise
+
+function expandLibItem(d) {
+  return {
+    match: d.m, name: d.n, year: d.y || '', remark: d.r || '', cls: d.c || '', pic: d.p || '',
+    channel: DIRECT_CHANNEL,
+    episodes: (d.e || []).map(e => ({ name: e[0], url: e[1].startsWith('http') ? e[1] : (d.pre + e[1]) })),
+  };
+}
+
+function loadDirectLib() {
+  if (!directDynamicReady) {
+    directDynamicReady = fetch('directlib.json')
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
+      .then(j => { directDynamic = (j.items || []).map(expandLibItem); console.log(`直链库已加载：${directDynamic.length} 部`); return directDynamic; })
+      .catch(e => { console.warn('直链库加载失败（降级为内置库）:', e.message); directDynamic = []; return directDynamic; });
+  }
+  return directDynamicReady;
+}
+loadDirectLib();   // 打开页面就开始拉
+
 const TIMEOUT_SEARCH = 6000;   // 搜索单请求超时 6s（渐进式渲染，慢渠道不阻塞出结果）
 const SEARCH_DEADLINE = 6500;  // 搜索总时限：到点先展示已到的结果，慢渠道后台继续补
 const TIMEOUT_DETECT = 8000;   // 播放检测超时 8s（保证播放可靠性，不压缩）
@@ -184,11 +210,12 @@ async function searchAll(query, onPartial) {
     }
   };
 
-  // 直链精选：关键词命中即参与合并（线上/本地都可直接播放，不受渠道 API 跨域限制），
+  // 直链精选（内置 + 批量库）：关键词命中即参与合并（线上/本地都可直接播放，不受渠道 API 跨域限制），
   // 立即回调一次 onPartial，让直链结果最先出现在页面上
+  await Promise.race([directDynamicReady, new Promise(r => setTimeout(r, 3000))]);   // 批量库一般打开页面就已就绪，最多等 3s
   const qn = normalizeTitle(query);
   let hasDirect = false;
-  for (const d of DIRECT_LIBRARY) {
+  for (const d of [...DIRECT_LIBRARY, ...directDynamic]) {
     const dn = normalizeTitle(d.match);
     if (qn.includes(dn) || dn.includes(qn)) {
       absorb([{
@@ -762,10 +789,10 @@ async function requestSuggestions(query) {
 
   // 直链精选优先进入联想：命中即置顶显示（这些保证可播）
   const qn = normalizeTitle(query);
-  for (const d of DIRECT_LIBRARY) {
+  for (const d of [...DIRECT_LIBRARY, ...directDynamic]) {
     const dn = normalizeTitle(d.match);
     if (qn.includes(dn) || dn.includes(qn)) {
-      merged.set(normalizeTitle(d.name), { name: d.name, pic: d.pic, remark: d.remark + ' · 可直接播放', year: d.year });
+      merged.set(normalizeTitle(d.name), { name: d.name, pic: d.pic, remark: (d.remark ? d.remark + ' · ' : '') + '可直接播放', year: d.year });
     }
   }
   const flush = () => {
