@@ -329,11 +329,11 @@ async function playVideo(url) {
 }
 
 /* ---------------- 横屏播放 ----------------
- * 三种环境：
- *  1. 桌面浏览器：普通全屏（F11 那种）；
- *  2. 安卓：真全屏 + screen.orientation.lock('landscape')，真正锁横屏；
- *  3. iPhone/iPad Safari：不支持 orientation.lock，也不支持元素全屏 →
- *     用 CSS 伪横屏（容器旋转 90° 铺满屏幕），不受系统「竖排方向锁」限制。
+ * 两种环境：
+ *  1. 手机（iOS + 安卓）：CSS 伪横屏 —— 容器旋转 90° 铺满整屏，不受系统「竖排方向锁」限制。
+ *     特意不用 requestFullscreen：安卓 Chrome 进入真全屏会弹无法由网页控制的系统提示条，
+ *     伪横屏视觉效果相同且不触发任何浏览器提示；
+ *  2. 桌面浏览器：普通全屏（F11 那种）。
  */
 const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -358,7 +358,6 @@ function enterPseudoLandscape() {
   document.body.classList.add('pl-on');
   $('lsExit').classList.remove('hidden');
   updateRotateBtn();
-  toast('把手机横过来拿着看喵～', 'ok', 3000);
 }
 
 function exitPseudoLandscape() {
@@ -380,31 +379,16 @@ async function toggleLandscape() {
     return;
   }
 
-  const wrap = playerWrap();
-  if (!wrap) return;
-
-  // iPhone / iPad：直接伪横屏（元素全屏与方向锁均不可用）
-  if (IS_IOS) { enterPseudoLandscape(); return; }
+  // 手机（iOS + 安卓）：统一走伪横屏。
+  // 不用 requestFullscreen —— 安卓 Chrome 进入真全屏会弹无法关闭权限的系统提示条，
+  // 伪横屏视觉效果相同（容器旋转 90° 铺满整屏）且不触发任何浏览器提示。
+  if (IS_MOBILE) { enterPseudoLandscape(); return; }
 
   // 桌面：普通全屏
-  if (!IS_MOBILE) {
-    try { await wrap.requestFullscreen(); } catch (e) { toast('当前浏览器不支持全屏喵…', 'warn'); }
-    updateRotateBtn();
-    return;
-  }
-
-  // 安卓：真全屏 + 锁横屏；锁失败则回退伪横屏
-  try {
-    if (wrap.requestFullscreen) await wrap.requestFullscreen();
-    else if (wrap.webkitRequestFullscreen) wrap.webkitRequestFullscreen();
-    else throw new Error('no fullscreen');
-    if (screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape');
-    else throw new Error('no orientation lock');
-    updateRotateBtn();
-  } catch (e) {
-    if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch (e2) { /* ignore */ } }
-    enterPseudoLandscape();
-  }
+  const wrap = playerWrap();
+  if (!wrap) return;
+  try { await wrap.requestFullscreen(); } catch (e) { toast('当前浏览器不支持全屏喵…', 'warn'); }
+  updateRotateBtn();
 }
 
 /** 彻底退出横屏（关弹窗时调用） */
