@@ -23,6 +23,25 @@ const CHANNELS = [
   { key: 'uku',       name: 'uku源',    api: 'https://api.ukuapi88.com/api.php/provide/vod', cors: false },
 ];
 
+/* ---------------- 直链精选（内置直连资源库） ----------------
+ * 背景：不少番的查询 API 不开放跨域（线上搜不到），但其视频 CDN 开放跨域
+ * （实测 ACAO:*、URL 无时效签名）→ 把这类资源以直链形式内置，线上零代理直接播。
+ * 匹配规则：搜索词与 match 归一化后互含即命中，命中就作为一个渠道参与合并。
+ * 扩充方法：往数组加一条（直链先验证 CDN 带 ACAO:* 头再入库，防线上播不了）。
+ */
+const DIRECT_LIBRARY = [
+  {
+    match: '萤火之森',
+    name: '萤火之森',
+    year: '2011',
+    remark: '正片 · 剧场版',
+    cls: '剧情,爱情,动画,奇幻',
+    pic: 'https://www.imgzy360.com:7788/upload/vod/20241104-1/73b701c9a7d01788770fc88521d71503.jpg',
+    channel: { key: 'direct', name: '直链精选', cors: true, api: '' },
+    episodes: [{ name: '正片', url: 'https://vod2.maowushi.com/20241103/jJ6EjZ7l/index.m3u8' }],
+  },
+];
+
 const TIMEOUT_SEARCH = 6000;   // 搜索单请求超时 6s（渐进式渲染，慢渠道不阻塞出结果）
 const SEARCH_DEADLINE = 6500;  // 搜索总时限：到点先展示已到的结果，慢渠道后台继续补
 const TIMEOUT_DETECT = 8000;   // 播放检测超时 8s（保证播放可靠性，不压缩）
@@ -164,6 +183,28 @@ async function searchAll(query, onPartial) {
       }
     }
   };
+
+  // 直链精选：关键词命中即参与合并（线上/本地都可直接播放，不受渠道 API 跨域限制），
+  // 立即回调一次 onPartial，让直链结果最先出现在页面上
+  const qn = normalizeTitle(query);
+  let hasDirect = false;
+  for (const d of DIRECT_LIBRARY) {
+    const dn = normalizeTitle(d.match);
+    if (qn.includes(dn) || dn.includes(qn)) {
+      absorb([{
+        id: 'direct-' + d.match,
+        name: d.name,
+        pic: d.pic,
+        remark: d.remark,
+        year: d.year,
+        cls: d.cls,
+        channel: d.channel,
+        episodes: d.episodes,
+      }]);
+      hasDirect = true;
+    }
+  }
+  if (hasDirect && onPartial) onPartial(merged(), null, CHANNELS.length);
 
   let doneCount = 0;
   const jobs = CHANNELS.map(async (ch) => {
@@ -718,6 +759,15 @@ async function requestSuggestions(query) {
   if (cached) { renderSuggestions(cached, query); return; }
 
   const merged = new Map();
+
+  // 直链精选优先进入联想：命中即置顶显示（这些保证可播）
+  const qn = normalizeTitle(query);
+  for (const d of DIRECT_LIBRARY) {
+    const dn = normalizeTitle(d.match);
+    if (qn.includes(dn) || dn.includes(qn)) {
+      merged.set(normalizeTitle(d.name), { name: d.name, pic: d.pic, remark: d.remark + ' · 可直接播放', year: d.year });
+    }
+  }
   const flush = () => {
     if (seq !== suggestSeq) return;
     const items = [...merged.values()];
