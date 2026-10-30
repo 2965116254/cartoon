@@ -40,6 +40,18 @@ const DIRECT_LIBRARY = [
     channel: { key: 'direct', name: '直链精选', cors: true, api: '' },
     episodes: [{ name: '正片', url: 'https://vod2.maowushi.com/20241103/jJ6EjZ7l/index.m3u8' }],
   },
+  {
+    match: '死亡笔记',
+    name: '死亡笔记',
+    year: '2006',
+    remark: '全37集 · TV正片',
+    cls: '悬疑,奇幻,动画',
+    pic: 'https://hongniuzyimage.com/cover/6fd733381c93800945007fda93e83c34.jpg',
+    channel: { key: 'direct', name: '直链精选', cors: true, api: '' },
+    // 红牛源 CDN（hn.bfvvs.com）实测 ACAO:*，首尾集直连验证通过（2026-10-30）
+    episodes: ['dL97ByDe', 'e31QJARb', 'bkR8M4Ja', 'bkR8Mv6a', 'dR6OBGVd', 'bW6LBVxa', 'dPN7Jy4a', 'e731J5ye', 'av2lJ30a', 'dBBNEWkd', 'dL97BqXe', 'egJZX0kd', 'bo2VJ1Xa', 'av2lJ48a', 'av2lJ35a', 'e5yQ0P8e', 'dR6OBxOd', 'azpvlOyd', 'dNkL1Jve', 'bqx78Bpa', 'e1wW7AZb', 'bqx78B7a', 'e9r1XKDa', 'dJ6yXpgd', 'dPN7J41a', 'bqx78v0a', 'e731JKQe', 'bmZOX39d', 'bmZOX3Gd', 'eER8Qwga', 'bkR8MmNa', 'dJ6yXmJd', 'dBBNE0Qd', 'bYEWXL2b', 'axknjgBe', 'azpvlGZd', 'e1wW78Vb']
+      .map((h, i) => ({ name: i === 36 ? '第37集完结' : `第${i + 1}集`, url: `https://hn.bfvvs.com/play/${h}/index.m3u8` })),
+  },
 ];
 
 /* 直链精选 · 批量库（directlib.json，由 _genlib.js 批量抽取+验证生成）
@@ -68,8 +80,8 @@ function loadDirectLib() {
 }
 loadDirectLib();   // 打开页面就开始拉
 
-const TIMEOUT_SEARCH = 6000;   // 搜索单请求超时 6s（渐进式渲染，慢渠道不阻塞出结果）
-const SEARCH_DEADLINE = 6500;  // 搜索总时限：到点先展示已到的结果，慢渠道后台继续补
+const TIMEOUT_SEARCH = 8000;   // 搜索单请求超时 8s（渠道波动时多等一等；渐进式渲染不影响先到先显示）
+const SEARCH_DEADLINE = 9000;  // 搜索总时限：到点先展示已到的结果，慢渠道后台继续补
 const TIMEOUT_DETECT = 8000;   // 播放检测超时 8s（保证播放可靠性，不压缩）
 const LS_HISTORY = 'meow_anime_history';
 
