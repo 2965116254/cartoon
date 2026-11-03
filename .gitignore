@@ -7,3 +7,6 @@ _*.js
 .token
 .token.txt
 *.token
+
+# 测试产物
+e2e-*.png
