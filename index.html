@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>喵呜动漫 🌸 · 可爱动漫搜索播放</title>
-<link rel="stylesheet" href="style.css?v=6">
+<link rel="stylesheet" href="style.css?v=7">
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.13/dist/hls.min.js"></script>
 </head>
 <body>
@@ -51,7 +51,14 @@
       <p class="slogan">搜一搜，马上看～ 多渠道自动找片喵！</p>
     </div>
   </div>
+  <button id="settingsBtn" class="settings-btn" title="转发通道设置" aria-label="转发通道设置">⚙</button>
 </header>
+
+<!-- 转发通道失效提示条 -->
+<div id="proxyBar" class="proxy-bar hidden" role="status">
+  <span id="proxyBarText">转发通道连不上，现在只能看精选库里的番</span>
+  <button id="proxyBarFix" class="proxy-bar-btn">去设置</button>
+</div>
 
 <main>
   <!-- 搜索区 -->
@@ -169,9 +176,31 @@
   </div>
 </div>
 
+<!-- 转发通道设置 -->
+<div id="proxyModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="proxyTitle">
+  <div class="modal-mask" id="proxyMask"></div>
+  <div class="proxy-card">
+    <button class="modal-close" id="proxyClose" title="关闭">✖</button>
+    <h2 id="proxyTitle">🔌 转发通道</h2>
+    <p class="proxy-desc">
+      采集站不开放跨域，页面必须借一个转发地址才能读到接口数据。
+      默认用内置通道；如果它失效，或者你想换成自己的，把新地址填进来就行 —— <b>不用改代码、不用重新部署</b>。
+    </p>
+    <label class="proxy-label" for="proxyInput">转发地址（以 <code>?url=</code> 结尾）</label>
+    <input id="proxyInput" class="proxy-input" type="text" placeholder="https://example.com/api?url=" autocomplete="off" spellcheck="false">
+    <p class="proxy-tip">留空即使用内置通道。也可以填 Cloudflare Worker 之类的自有地址。</p>
+    <div class="proxy-actions">
+      <button id="proxyTest" class="btn-soft">测试连通</button>
+      <button id="proxySave" class="btn-candy">保存</button>
+      <button id="proxyReset" class="btn-soft">恢复默认</button>
+    </div>
+    <p id="proxyStatus" class="proxy-status"></p>
+  </div>
+</div>
+
 <!-- 轻提示 -->
 <div id="toastBox" class="toast-box"></div>
 
-<script src="app.js?v=17"></script>
+<script src="app.js?v=18"></script>
 </body>
 </html>

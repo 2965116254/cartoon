@@ -26,6 +26,18 @@ python serve.py
 - 📌 播放历史（localStorage），点一下续看
 - 🐱 可爱卡通风：Q版猫娘看板娘、粉嫩渐变、果冻按钮、漂浮装饰
 
+## 线上部署（GitHub Pages + 转发通道）
+
+2026-11 起采集站集体去掉了 `Access-Control-Allow-Origin`，**https 页面直连接口必被浏览器拦截**。
+所以线上必须有一个「转发通道」把接口转成带跨域头的响应：
+
+- 转发代码：`wechat-groq/cloudfunctions/cartoon-proxy/`（腾讯云开发云函数，网关路由 `/cartoon`）
+- 页面默认用它，地址写在 `app.js` 的 `DEFAULT_PROXY`
+- **地址可换**：页面右上角 ⚙ → 填新地址 → 保存即生效，不用改代码重新部署
+- 通道挂了页面顶部会显示黄色提示条；本地 `serve.py` 模式不走这条通道
+
+> 视频分片（m3u8/ts）**绝不经过转发**，一律直连 CDN —— 否则流量和云函数额度会瞬间烧光。
+
 ## 新增 / 更换渠道
 
 编辑 `app.js` 顶部的 `CHANNELS` 数组：
@@ -39,6 +51,9 @@ python serve.py
 ```
 node _selftest.js 火影忍者
 ```
+
+> 新增渠道除了改 `CHANNELS`，还要把域名加进 `cartoon-proxy/index.js` 的 `ALLOW_HOSTS` 并重新部署，
+> 否则线上会被转发层以「域名不在白名单」拒掉。
 
 自测脚本与页面逻辑同源（同样走本地代理），能跑出 `m3u8可播✅` 的渠道才值得加进去。
 渠道挂了不用改代码——检测层会自动把它标记为不可用并跳过。

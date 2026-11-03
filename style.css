@@ -356,3 +356,62 @@ body.pl-on .ep-block { visibility: hidden; }
   .modal-cover { width: 70px; }
   .ep-list { grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); }
 }
+
+/* ---------- 转发通道设置 ---------- */
+.settings-btn {
+  position: absolute; top: 20px; right: 18px; z-index: 3;
+  width: 38px; height: 38px; border-radius: 50%;
+  border: 2px solid var(--pink-light); background: #fff;
+  color: var(--pink-deep); font-size: 16px; cursor: pointer;
+  display: grid; place-items: center; line-height: 1;
+  box-shadow: var(--shadow); transition: transform .25s, border-color .2s;
+}
+.settings-btn:hover { transform: rotate(60deg); border-color: var(--pink); }
+
+.proxy-bar {
+  position: relative; z-index: 2;
+  max-width: 760px; margin: 6px auto 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px; border-radius: 999px;
+  background: #fff4d6; border: 2px solid #ffd98a;
+  color: #8a5a12; font-size: 13px; line-height: 1.5;
+}
+.proxy-bar-btn {
+  margin-left: auto; flex: none;
+  border: none; background: #ffb84d; color: #5a3b4a;
+  padding: 5px 12px; border-radius: 999px; font-size: 12px;
+  cursor: pointer; white-space: nowrap;
+}
+.proxy-bar-btn:hover { background: #ffa726; }
+
+.proxy-card {
+  position: relative; width: min(520px, 100%);
+  background: var(--card); border-radius: 26px; padding: 24px;
+  box-shadow: 0 20px 60px rgba(90,59,74,.35);
+  animation: popIn .3s ease both;
+}
+.proxy-card h2 { font-size: 19px; margin-bottom: 10px; }
+.proxy-desc { font-size: 13px; line-height: 1.75; color: var(--ink-light); margin-bottom: 16px; }
+.proxy-label { display: block; font-size: 12px; color: var(--ink-light); margin-bottom: 6px; }
+.proxy-input {
+  width: 100%; padding: 11px 14px; border-radius: 14px;
+  border: 2px solid var(--pink-light); background: #fff;
+  font-size: 13px; color: var(--ink); font-family: inherit;
+  outline: none; transition: border-color .2s;
+}
+.proxy-input:focus { border-color: var(--pink); }
+.proxy-tip { font-size: 11.5px; color: var(--ink-light); margin-top: 6px; line-height: 1.6; }
+.proxy-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.proxy-status { font-size: 12.5px; margin-top: 12px; min-height: 18px; line-height: 1.5; white-space: pre-line; word-break: break-all; }
+.proxy-status.ok { color: #1f9d6b; }
+.proxy-status.err { color: #d94b83; }
+.proxy-card code {
+  background: var(--pink-light); color: var(--pink-deep);
+  padding: 1px 5px; border-radius: 5px; font-size: 11.5px;
+}
+
+@media (max-width: 520px) {
+  .settings-btn { top: 14px; right: 12px; width: 34px; height: 34px; font-size: 14px; }
+  .proxy-bar { margin: 6px 12px 0; font-size: 12px; }
+  .proxy-card { padding: 20px 18px; }
+}

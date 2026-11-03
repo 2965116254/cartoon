@@ -101,9 +101,37 @@ const IS_LOCAL_SERVER = ['127.0.0.1', 'localhost'].includes(location.hostname)
   && location.protocol.startsWith('http');
 const IS_REMOTE = location.protocol === 'https:' && !IS_LOCAL_SERVER;
 
-/* 自建跨域转发（只转发接口 JSON，不转发视频） */
-const CLOUD_PROXY = 'https://model-d4gmkrluh339b9272-1398780927.ap-shanghai.app.tcloudbase.com/cartoon?url=';
-const viaCloud = (u) => CLOUD_PROXY + encodeURIComponent(u);
+/* ---------------- 转发通道（自建跨域代理） ----------------
+ * 采集站不开放跨域，接口 JSON 必须经过一个「服务端中转」才能被浏览器读取。
+ * 内置通道跑在腾讯云开发上（免费体验版 6 个月一续），所以地址做成**可配置**：
+ * 万一内置通道失效，在页面齿轮里填一个新地址即可生效，不用改代码重新部署。
+ */
+const DEFAULT_PROXY = 'https://model-d4gmkrluh339b9272-1398780927.ap-shanghai.app.tcloudbase.com/cartoon?url=';
+const LS_PROXY = 'meow_anime_proxy';
+const SS_PROXY_HEALTH = 'meow_anime_proxy_health';
+const PROXY_HEALTH_TTL = 10 * 60 * 1000;   // 健康检查结果缓存 10 分钟，避免每次打开都打一次通道
+
+/** 把用户输入的地址规范成 `...?url=` 形式，容错常见手填格式 */
+function normalizeProxy(input) {
+  let s = String(input || '').trim();
+  if (!s) return '';
+  if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
+  if (!/[?&]url=$/.test(s)) {
+    s = s.replace(/[?&]+$/, '');
+    s += (s.indexOf('?') >= 0 ? '&' : '?') + 'url=';
+  }
+  return s;
+}
+
+function getProxyBase() {
+  try {
+    const custom = normalizeProxy(localStorage.getItem(LS_PROXY));
+    if (custom) return custom;
+  } catch (e) { /* localStorage 被禁用时退回默认 */ }
+  return DEFAULT_PROXY;
+}
+
+const viaCloud = (u) => getProxyBase() + encodeURIComponent(u);
 
 function px(url) {
   return IS_LOCAL_SERVER ? '/proxy?url=' + encodeURIComponent(url) : url;
@@ -957,10 +985,66 @@ function applyResults(items, query) {
   return lastResults;
 }
 
+/* ---------------- 搜索结果本地缓存 ----------------
+ * 目的：省云函数额度。一个人反复搜同一部番很常见，
+ * 每次搜索要打 8 个渠道（=8 次云函数调用），缓存能把调用量砍掉六七成。
+ * 只缓存「有结果」的搜索，10 分钟过期；数据存在 localStorage，关掉页面也在。 */
+const LS_SEARCH_CACHE = 'meow_anime_search_cache_v1';
+const SEARCH_CACHE_TTL = 10 * 60 * 1000;
+const SEARCH_CACHE_MAX = 12;      // 最多缓存 12 个关键词，超了淘汰最旧的
+let searchCache = {};
+
+function loadSearchCache() {
+  try { searchCache = JSON.parse(localStorage.getItem(LS_SEARCH_CACHE)) || {}; }
+  catch (e) { searchCache = {}; }
+}
+
+function cacheGet(q) {
+  const k = normalizeTitle(q);
+  const hit = searchCache[k];
+  if (!hit || !Array.isArray(hit.items) || !hit.items.length) return null;
+  if (Date.now() - hit.at > SEARCH_CACHE_TTL) { delete searchCache[k]; return null; }
+  return hit.items;
+}
+
+function cacheSet(q, items) {
+  if (!Array.isArray(items) || !items.length) return;   // 空结果不缓存：可能是渠道临时抖动
+  const k = normalizeTitle(q);
+  if (!k) return;
+  searchCache[k] = { at: Date.now(), items };
+  const keys = Object.keys(searchCache);
+  if (keys.length > SEARCH_CACHE_MAX) {
+    keys.sort((a, b) => (searchCache[a].at || 0) - (searchCache[b].at || 0))
+      .slice(0, keys.length - SEARCH_CACHE_MAX)
+      .forEach(old => delete searchCache[old]);
+  }
+  try {
+    localStorage.setItem(LS_SEARCH_CACHE, JSON.stringify(searchCache));
+  } catch (e) {
+    searchCache = {};   // 配额满了就放弃缓存，绝不影响正常搜索
+  }
+}
+
 async function doSearch(query) {
   query = String(query || '').trim();
   if (!query) { toast('先输入想看的动漫名字喵～', 'warn'); return; }
   if (searching) return;
+
+  // 命中缓存：直接渲染，不打接口（这一步省下的就是云函数额度）
+  const cached = cacheGet(query);
+  if (cached) {
+    hideSuggestions();
+    $('searchInput').value = query;
+    $('statusArea').classList.add('hidden');
+    $('emptyArea').classList.add('hidden');
+    const cachedList = applyResults(cached, query);
+    if (cachedList.length) {
+      renderResults(cachedList);
+      toast('用了几分钟前的结果，直接看吧喵～', '', 1800);
+      return;
+    }
+  }
+
   searching = true;
   const seq = ++searchSeq;
   hideSuggestions();
@@ -997,6 +1081,7 @@ async function doSearch(query) {
       $('emptyText').textContent = `没有在 ${CHANNELS.length} 个渠道找到「${query}」喵… 换个名字试试？`;
     } else {
       renderResults(list);
+      cacheSet(query, items);   // 有结果才缓存，下次同样的搜索不再打接口
     }
   } finally {
     if (seq === searchSeq) searching = false;
@@ -1044,11 +1129,133 @@ document.addEventListener('keydown', (e) => {
 });
 $('sortSelect').onchange = () => renderResults(lastResults);
 
+/* ---------------- 转发通道：设置面板 + 健康检查 ---------------- */
+let proxyState = 'unknown';   // unknown | ok | fail
+
+function setProxyStatus(text, cls) {
+  const el = $('proxyStatus');
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'proxy-status' + (cls ? ' ' + cls : '');
+}
+
+function openProxyModal() {
+  let custom = '';
+  try { custom = localStorage.getItem(LS_PROXY) || ''; } catch (e) {}
+  $('proxyInput').value = custom;
+  setProxyStatus(custom ? '当前使用自定义通道' : '当前使用内置通道', 'ok');
+  $('proxyModal').classList.remove('hidden');
+}
+
+function closeProxyModal() { $('proxyModal').classList.add('hidden'); }
+
+/** 探测转发地址是否可用。
+ *  判定标准：fetch 不抛错即算通 —— 4xx/5xx 也说明「域名可达 + 跨域头正常」；
+ *  真正被拦的情况浏览器会直接抛 CORS/网络错误。 */
+async function probeProxy(base, ms = 8000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    await fetch(base, { signal: ctrl.signal, cache: 'no-store' });
+    return true;
+  } catch (e) {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function applyProxyState() {
+  const bar = $('proxyBar');
+  if (!bar) return;
+  if (proxyState === 'fail') {
+    $('proxyBarText').textContent = '转发通道连不上，现在只能看精选库里的番';
+    bar.classList.remove('hidden');
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+
+async function checkProxyHealth(force) {
+  if (!IS_REMOTE) return;   // 本地走 serve.py，跟转发通道无关
+  const base = getProxyBase();
+  if (!force) {
+    try {
+      const raw = sessionStorage.getItem(SS_PROXY_HEALTH);
+      if (raw) {
+        const o = JSON.parse(raw);
+        if (o.base === base && Date.now() - o.at < PROXY_HEALTH_TTL) {
+          proxyState = o.ok ? 'ok' : 'fail';
+          applyProxyState();
+          return;
+        }
+      }
+    } catch (e) { /* 忽略缓存异常 */ }
+  }
+  const ok = await probeProxy(base);
+  proxyState = ok ? 'ok' : 'fail';
+  try { sessionStorage.setItem(SS_PROXY_HEALTH, JSON.stringify({ base, ok, at: Date.now() })); } catch (e) {}
+  applyProxyState();
+}
+
+$('settingsBtn').onclick = openProxyModal;
+$('proxyClose').onclick = closeProxyModal;
+$('proxyMask').onclick = closeProxyModal;
+$('proxyBarFix').onclick = openProxyModal;
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('proxyModal').classList.contains('hidden')) closeProxyModal();
+});
+
+$('proxyTest').onclick = async () => {
+  const raw = $('proxyInput').value.trim();
+  const base = raw ? normalizeProxy(raw) : DEFAULT_PROXY;
+  setProxyStatus('正在测试…');
+  const ok = await probeProxy(base);
+  setProxyStatus(ok ? '✅ 通道可用\n' + base : '❌ 连不上：确认地址是否正确、通道是否还在运行', ok ? 'ok' : 'err');
+};
+
+$('proxySave').onclick = async () => {
+  const raw = $('proxyInput').value.trim();
+  let base = '';
+  if (raw) {
+    base = normalizeProxy(raw);
+    if (!base) { setProxyStatus('地址格式不对，应以 http(s):// 开头', 'err'); return; }
+    try { localStorage.setItem(LS_PROXY, base); } catch (e) {}
+  } else {
+    try { localStorage.removeItem(LS_PROXY); } catch (e) {}
+  }
+  try { sessionStorage.removeItem(SS_PROXY_HEALTH); } catch (e) {}
+  setProxyStatus('正在验证…');
+  const ok = await probeProxy(getProxyBase());
+  proxyState = ok ? 'ok' : 'fail';
+  applyProxyState();
+  if (ok) {
+    setProxyStatus('已保存，通道可用 ✅', 'ok');
+    toast('转发通道已切换喵～', 'ok');
+    setTimeout(closeProxyModal, 900);
+  } else {
+    setProxyStatus('已保存，但暂时连不上 —— 可能还没部署好，稍后再进来测一次', 'err');
+  }
+};
+
+$('proxyReset').onclick = async () => {
+  try { localStorage.removeItem(LS_PROXY); } catch (e) {}
+  try { sessionStorage.removeItem(SS_PROXY_HEALTH); } catch (e) {}
+  $('proxyInput').value = '';
+  proxyState = 'unknown';
+  applyProxyState();
+  setProxyStatus('已恢复内置通道，正在重新检测…', 'ok');
+  checkProxyHealth(true);
+};
+
+loadSearchCache();
+
 renderHistory();
 
 // file:// 直开模式下大部分渠道会被浏览器 CORS 拦截，提醒用户
 if (!IS_LOCAL_SERVER && !IS_REMOTE) {
   toast('当前是直接打开模式，多渠道会被浏览器拦截喵！请用 python serve.py 启动，或部署到 GitHub Pages 观看', 'warn', 8000);
 } else if (IS_REMOTE) {
-  toast('线上模式：🌐 渠道可直连播放；💻 渠道需要本地代理，线上会自动跳过', '', 5000);
+  // 线上：接口走转发通道，视频直连 CDN —— 启动后异步探一次通道，挂了才提示，不打扰首屏
+  setTimeout(() => checkProxyHealth(), 1500);
 }
