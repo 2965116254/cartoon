@@ -155,6 +155,37 @@
 
 ---
 
+## v16 · 自建跨域转发，线上全渠道复活（根治 v15 的"没资源"）
+
+- **用户报告**：到现在暴风源还是没资源，是接口掉不通了吗，怎么补救
+- **排查结论——不是接口掉线，是跨域头被摘了**：
+  - 暴风 `?ac=detail&wd=` HTTP 200、49KB、2000 条数据齐全，**但响应头没有 `Access-Control-Allow-Origin`**
+  - 全量复查 8 个渠道 + 12 个候选采集站：**只有猫台源(maotaizy)还带 ACAO，但它返回 `code:1002 禁止关键词搜索`**，等于零
+  - 浏览器对 https 页面强制同源策略 → 响应体被丢弃 → 前端 catch → 显示"没有资源"。本地能搜是因为 serve.py 有 `/proxy`
+- **为什么不继续补直链**：152 部直链只覆盖已知热门，用户搜任何库外番都空；且每次都要人工验证 CDN，治标不治本
+- **修复（根治）：自建跨域转发函数**
+  1. 新增云函数 `wechat-groq/cloudfunctions/cartoon-proxy/`：接 `?url=<原接口>`，服务端回源后补 `Access-Control-Allow-Origin: *`
+     - **域名白名单**（14 个采集站），避免变成任意 URL 开放代理被刷额度
+     - **5 分钟内存缓存**（云开发有预热实例），同一关键词重复搜不耗资源点
+     - 单次回源 12s 超时、跟随 3 次重定向、OPTIONS 预检、`?` 无参自检
+  2. `cloudbaserc.json` 增加函数（128MB / 20s / installDependency:false）+ 网关路由 `/cartoon`（enableAuth:false）
+  3. `app.js` 新增 `CLOUD_PROXY` / `viaCloud()`，`candidateUrls()` 线上改为「**自建代理 → 直连 → 本机 serve.py**」三级候选
+     - **视频分片绝不过代理**：`px()` 未改，m3u8 仍直连 CDN（CDN 自带 CORS），否则流量和资源点都扛不住
+- **实测（线上代理，并发 8 渠道）**：
+  - 「死亡笔记」8/8 命中，总耗时 4565ms（暴风 1407ms）
+  - 「萤火之森」7/8 命中，总耗时 9151ms（最大源超时，被 deadline 兜底截断，已有 7 个渠道结果先显示）
+  - 返回体含 `vod_play_url` 完整 m3u8 地址，播放链路不变
+- **部署命令**（本机有系统代理，必须清掉）：
+  ```bash
+  cd wechat-groq
+  env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY tcb fn deploy cartoon-proxy -e model-d4gmkrluh339b9272 --force
+  env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY tcb deploy --only gateway -e model-d4gmkrluh339b9272
+  ```
+- **注意**：`tcb` 登录态会过期，首次命令会弹授权页并挂住（表现为命令超时无输出），重新授权后再跑一次即可
+- **新增渠道时**：除了 `CHANNELS`，还要把域名加进 `cartoon-proxy/index.js` 的 `ALLOW_HOSTS` 并重新部署
+
+---
+
 ## 当前架构速览
 
 ```
@@ -170,13 +201,15 @@ cartoon/
 └── Modification.md # 本文件
 ```
 
-- **渠道配置**：`app.js` 顶部 `CHANNELS` 数组，`cors: true` 表示 API 与视频 CDN 开放跨域（线上可直连）
+- **渠道配置**：`app.js` 顶部 `CHANNELS` 数组，`cors` 字段仅作历史记录（2026-11 起全部渠道 ACAO 已消失，不再影响线上走线）
+- **线上跨域**：接口走自建转发 `https://model-d4gmkrluh339b9272-1398780927.ap-shanghai.app.tcloudbase.com/cartoon?url=`（代码在 `wechat-groq/cloudfunctions/cartoon-proxy/`），视频分片直连 CDN
 - **本地运行**：`python serve.py` → http://127.0.0.1:8081 （全部渠道可用，最稳）
-- **线上运行**：GitHub Pages（🌐 渠道直连；💻 渠道线上自动跳过；开着本机 serve.py 时可借道）
+- **线上运行**：GitHub Pages（全渠道经自建转发，与本地效果接近）
 - **更新流程**：改代码 → 版本号 `?v=N` 递增 → `git add . && git commit && git push` → Pages 自动构建
 
 ## 已知限制
 
-- 线上可用渠道比本地少（目前暴风一家全链路开放跨域），是免费静态托管的跨域天然限制
+- 接口转发依赖腾讯云开发免费额度（3000 资源点/月，128MB 内存下单次搜索约 7 点 → 约 400 次/月）；量大需升配或换 Cloudflare Worker
+- 云函数首次调用有 2~3s 冷启动，随后 1~4s；最慢渠道（最大源）偶发超 9s，由搜索 deadline 兜底截断
 - 公共网络环境下渠道接口偶发超时属正常，"检测 + 自动换源"机制自动兜底
 - 视频源来自公开网络资源聚合，仅供学习交流，建议支持正版

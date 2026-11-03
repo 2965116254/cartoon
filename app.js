@@ -7,10 +7,11 @@
 'use strict';
 
 /* ---------------- 渠道配置（增删渠道只需改这里） ----------------
- * cors: 该渠道 API 是否自带 Access-Control-Allow-Origin: *（实测 2026-10-26）
+ * cors: 该渠道 API 当年是否自带 Access-Control-Allow-Origin: *（2026-10-26 实测）
+ *   - 2026-11 复查：8 个渠道的 ACAO 头已全部消失，cors 字段仅作历史记录保留，
+ *     线上统一走自建转发 CLOUD_PROXY（见下方"运行环境与代理策略"）；
  *   - 本地 serve.py：所有渠道都能用（走 /proxy 本地代理）
- *   - GitHub Pages 线上：只有 cors:true 的渠道可直连搜索/播放；
- *     其余渠道 API 无跨域许可，浏览器直接拦截（线上会自动跳过，不浪费时间）
+ *   - 新增渠道时，记得把域名加进 cartoon-proxy 的 ALLOW_HOSTS
  */
 const CHANNELS = [
   { key: 'baofeng',   name: '暴风源',   api: 'https://bfzyapi.com/api.php/provide/vod', cors: true },
@@ -87,14 +88,22 @@ const LS_HISTORY = 'meow_anime_history';
 
 /* ---------------- 运行环境与代理策略 ----------------
  * 1. 本地 serve.py（localhost）：一切走 /proxy?url= 本地代理，全渠道可用，最稳；
- * 2. GitHub Pages 线上（https）：无本地代理，公共 CORS 代理已实测全灭
- *    （corsproxy.io 要 key、codetabs/allorigins 国内超时）→ 策略改为「直连 + 开放跨域渠道优先」：
- *    cors:true 渠道（如暴风）API 和视频 CDN 都自带跨域许可，直连即可完整搜+播；
+ * 2. GitHub Pages 线上（https）：
+ *    2026-11 起采集站集体去掉了 `Access-Control-Allow-Origin: *` 响应头
+ *    （实测 8 个渠道全部 HTTP 200 有数据、但没有 ACAO），浏览器同源策略直接丢弃响应，
+ *    表现为「搜什么都是没有资源」。公共 CORS 代理又全灭（corsproxy.io 要 key、
+ *    codetabs/allorigins 国内超时）→ 自建一个跨域转发函数 cartoon-proxy
+ *    （腾讯云开发，/cartoon?url=，白名单 + 5 分钟缓存），线上接口一律走它。
+ *    视频分片仍直连 CDN（CDN 自带 CORS），绝不过代理 —— 否则流量和额度都扛不住。
  * 3. file:// 直开：全部直连，大部分渠道会被浏览器拦截（不推荐，会弹提示）。
  */
 const IS_LOCAL_SERVER = ['127.0.0.1', 'localhost'].includes(location.hostname)
   && location.protocol.startsWith('http');
 const IS_REMOTE = location.protocol === 'https:' && !IS_LOCAL_SERVER;
+
+/* 自建跨域转发（只转发接口 JSON，不转发视频） */
+const CLOUD_PROXY = 'https://model-d4gmkrluh339b9272-1398780927.ap-shanghai.app.tcloudbase.com/cartoon?url=';
+const viaCloud = (u) => CLOUD_PROXY + encodeURIComponent(u);
 
 function px(url) {
   return IS_LOCAL_SERVER ? '/proxy?url=' + encodeURIComponent(url) : url;
@@ -111,7 +120,11 @@ const LOCAL_PROXIES = ['http://127.0.0.1:8081/proxy?url='];
 function candidateUrls(url) {
   if (IS_LOCAL_SERVER) return [{ u: px(url), wrap: null }];
   if (IS_REMOTE) {
-    const list = [{ u: url, wrap: null }];   // 先直连（开放跨域的渠道直接成功）
+    // 自建代理优先（采集站已无 CORS 头，直连注定被浏览器拦掉）；
+    // 直连留作兜底：万一某个站恢复了跨域头，直连能省一跳；
+    // 本机 serve.py 排最后：电脑开着服务时多一条备用通道。
+    const list = [{ u: viaCloud(url), wrap: viaCloud }];
+    list.push({ u: url, wrap: null });
     for (const b of LOCAL_PROXIES) list.push({ u: b + encodeURIComponent(url), wrap: u2 => b + encodeURIComponent(u2) });
     return list;
   }
