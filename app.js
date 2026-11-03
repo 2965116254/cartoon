@@ -131,6 +131,20 @@ function candidateUrls(url) {
   return [{ u: url, wrap: null }];
 }
 
+/* 视频地址的候选通道：**绝不能走 CLOUD_PROXY**。
+ * 一旦视频也过代理，检测成功会把整部番的所有剧集地址都改写成代理地址
+ * （detectChannel 里 probe.wrap 那段），之后每个视频分片都打云函数，
+ * 一个视频几百个分片 → 流量和云开发资源点当场烧光。
+ * 实测各渠道 CDN 都自带 ACAO:*，直连即可；直连不通时再借本机 serve.py。 */
+function videoCandidateUrls(url) {
+  if (IS_LOCAL_SERVER) return [{ u: px(url), wrap: null }];
+  const list = [{ u: url, wrap: null }];
+  if (IS_REMOTE) {
+    for (const b of LOCAL_PROXIES) list.push({ u: b + encodeURIComponent(url), wrap: u2 => b + encodeURIComponent(u2) });
+  }
+  return list;
+}
+
 /* ---------------- 工具 ---------------- */
 const $ = (id) => document.getElementById(id);
 
@@ -313,8 +327,23 @@ function parseEpisodes(vod) {
     const idx = s.indexOf('$');
     if (idx === -1) return { name: '第?集', url: s.trim() };
     return { name: s.slice(0, idx).trim(), url: s.slice(idx + 1).trim() };
-  }).filter(e => /^(https?:)?\/\//.test(e.url));
+  }).filter(e => /^(https?:)?\/\//.test(e.url))
+    .map(e => ({ ...e, url: toPlayableUrl(e.url) }));   // 分享页补齐 index.m3u8
   return eps;
+}
+
+/** 把播放地址规范化成 hls 能识别的 m3u8 直链
+ *  部分渠道的 vod_play_url 给的是分享页 http://host/play/xxxx（不带扩展名），
+ *  真实直链是 http://host/play/xxxx/index.m3u8 ——
+ *  红牛(hn.bfvvs.com)、JRS(vv.jisuzyv.com)、速播(play.xluuss.com) 三个 CDN
+ *  实测都支持补后缀，返回 EXTM3U 且 ACAO:*。
+ *  不补的话 hls 判不出 m3u8 会按普通视频播，点了必然失败（表现为"这个渠道播不了"）。 */
+function toPlayableUrl(url) {
+  const u = String(url || '').trim();
+  if (!u) return u;
+  if (/\.m3u8(\?|#|$)/i.test(u)) return u;
+  if (/\/play\/[A-Za-z0-9]+$/i.test(u)) return u + '/index.m3u8';
+  return u;
 }
 
 /* ---------------- 播放前可用性检测（核心） ---------------- */
@@ -366,7 +395,7 @@ async function probeVideoUrl(url) {
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_DETECT);
   let lastNote = '';
   try {
-    for (const { u, wrap } of candidateUrls(url)) {
+    for (const { u, wrap } of videoCandidateUrls(url)) {
       try {
         const res = await fetch(u, { signal: ctrl.signal });
         if (!res.ok) { lastNote = 'HTTP ' + res.status; continue; }
@@ -403,6 +432,7 @@ function destroyHls() {
 async function playVideo(url) {
   const v = $('videoPlayer');
   destroyHls();
+  url = toPlayableUrl(url);   // 兜底：任何入口进来的地址都规范化一次
   if (window.Hls && Hls.isSupported() && /\.m3u8/i.test(url)) {
     hlsInstance = new Hls({ maxBufferLength: 30 });
     hlsInstance.loadSource(px(url));
@@ -769,6 +799,10 @@ const SUGGEST_DEBOUNCE = 300;    // 停止输入 300ms 才请求
 const SUGGEST_TIMEOUT = 3500;    // 联想单请求超时（比正式搜索更短，保证跟手）
 const SUGGEST_MAX = 12;          // 下拉最多展示条数
 const SUGGEST_MIN_CHARS = 2;     // 至少输入 2 个字才联想
+/* 联想最多并发几个渠道：每敲一次字都要打一次云函数，8 个渠道全开会把
+ * 云开发资源点烧光（一次输入 = 8 次调用）。取前 3 个（暴风/360/360备）够用，
+ * 反正回车后的正式搜索仍是全渠道。 */
+const SUGGEST_CHANNELS = 3;
 let suggestSeq = 0;
 let suggestTimer = null;
 let sugActiveIdx = -1;           // 键盘高亮行
@@ -779,7 +813,8 @@ async function suggestChannel(ch, query) {
   const url = `${ch.api}?ac=videolist&wd=${encodeURIComponent(query)}`;
   let data = null;
   let cands = candidateUrls(url);
-  if (IS_REMOTE && !ch.cors) cands = [...cands.filter(c => c.wrap), ...cands.filter(c => !c.wrap)];
+  // 线上联想只走能用的通道：裸直连必被 CORS 拦，除了刷一屏红色报错没有任何收益
+  if (IS_REMOTE) cands = cands.filter(c => c.wrap);
   for (const { u } of cands) {
     if (data) break;
     try {
@@ -828,7 +863,7 @@ async function requestSuggestions(query) {
     renderSuggestions(items, query);
   };
 
-  CHANNELS.forEach(async (ch) => {
+  CHANNELS.slice(0, SUGGEST_CHANNELS).forEach(async (ch) => {
     const r = await suggestChannel(ch, query).catch(() => []);
     if (seq !== suggestSeq) return;
     const rel = r.filter(it => suggestMatch(it.name, query));

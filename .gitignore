@@ -2,3 +2,8 @@ node_modules/
 _selftest.js
 __pycache__/
 _*.js
+
+# 凭据：绝不允许进仓库（GitHub 会自动吊销泄漏的 PAT）
+.token
+.token.txt
+*.token
