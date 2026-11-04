@@ -1,0 +1,13 @@
+# 喵呜动漫：拒绝一切爬虫收录与批量抓取
+User-agent: *
+Disallow: /
+
+# AI 爬虫显式拒绝（部分厂商认这个写法）
+User-agent: GPTBot
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
